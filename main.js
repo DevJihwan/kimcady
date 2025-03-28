@@ -49,41 +49,53 @@ const getAccessToken = async () => {
 };
 
 const parseMultipartFormData = (data) => {
-    const result = {};
-    const boundary = data.match(/------WebKitFormBoundary[a-zA-Z0-9]+/)[0];
-    const parts = data.split(boundary).slice(1, -1);
-  
-    parts.forEach(part => {
-      const match = part.match(/name=\"([^\"]+)\"[\r\n]+([\s\S]+?)(?=\r\n|$)/);
-      if (match) {
-        const [, key, value] = match;
-        result[key] = value.trim();
-      }
-    });
-    console.log('[DEBUG] Parsed multipart/form-data:', JSON.stringify(result, null, 2));
-    return result;
-  };
+  const result = {};
+  const boundary = data.match(/------WebKitFormBoundary[a-zA-Z0-9]+/)[0];
+  const parts = data.split(boundary).slice(1, -1);
 
-// "결제완료" 버튼 상태 확인 함수
-const checkPaymentCompletedStatus = async (page) => {
-    try {
-      const isChecked = await page.evaluate(() => {
-        const checkbox = document.querySelector('label.MuiFormControlLabel-root span.MuiCheckbox-root');
-        if (checkbox) {
-          return checkbox.classList.contains('Mui-checked');
-        }
-        return false;
-      });
-      console.log(`[DEBUG] Payment Completed Checkbox Status: ${isChecked}`);
-      return isChecked;
-    } catch (error) {
-      console.error(`[ERROR] Failed to check payment completed status: ${error.message}`);
-      return false; // 오류 발생 시 기본값으로 false 반환
+  parts.forEach(part => {
+    const match = part.match(/name=\"([^\"]+)\"[\r\n]+([\s\S]+?)(?=\r\n|$)/);
+    if (match) {
+      const [, key, value] = match;
+      result[key] = value.trim();
     }
-  };
+  });
+  console.log('[DEBUG] Parsed multipart/form-data:', JSON.stringify(result, null, 2));
+  return result;
+};
+
+// book_id에 대한 결제 금액을 대기하는 함수
+const waitForPaymentAmount = async (bookId, paymentAmounts, timeout = 10000) => {
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    if (paymentAmounts.has(bookId)) {
+      const amount = paymentAmounts.get(bookId);
+      console.log(`[INFO] Found payment amount for book_id ${bookId}: ${amount}`);
+      return amount;
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  console.log(`[WARN] Timeout waiting for payment amount for book_id ${bookId}`);
+  return 0; // 타임아웃 시 기본값 0 반환
+};
+
+// book_id에 대한 결제 상태를 대기하는 함수
+const waitForPaymentStatus = async (bookId, paymentStatus, timeout = 10000) => {
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    if (paymentStatus.has(bookId)) {
+      const status = paymentStatus.get(bookId);
+      console.log(`[INFO] Found payment status for book_id ${bookId}: ${status}`);
+      return status;
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  console.log(`[WARN] Timeout waiting for payment status for book_id ${bookId}`);
+  return false; // 타임아웃 시 기본값 false 반환
+};
 
 // 24golf API로 데이터 전송
-const sendTo24GolfApi = async (type, url, payload, response = null, accessToken, processedBookings = new Set(), page = null) => {
+const sendTo24GolfApi = async (type, url, payload, response = null, accessToken, processedBookings = new Set(), paymentAmounts = new Map(), paymentStatus = new Map()) => {
   if (type === 'Booking_Create' && response && response.book_id && processedBookings.has(response.book_id)) {
     console.log(`[INFO] Booking_Create already processed for book_id: ${response.book_id}, skipping...`);
     return;
@@ -96,12 +108,11 @@ const sendTo24GolfApi = async (type, url, payload, response = null, accessToken,
   let apiMethod, apiUrl, apiData;
   const headers = { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' };
 
-  // "결제완료" 상태 확인 (page가 제공된 경우에만)
+  // 결제 상태를 paymentStatus Map에서 가져오기
   let isPaymentCompleted = false;
-  if (page) {
-    isPaymentCompleted = await checkPaymentCompletedStatus(page);
-    console.log(`isPaymentCompleted : ${isPaymentCompleted}`);
-  }
+  const bookId = response?.book_id || payload?.externalId || 'unknown';
+  isPaymentCompleted = await waitForPaymentStatus(bookId, paymentStatus);
+  console.log(`isPaymentCompleted (from /owner/revenue/ finished): ${isPaymentCompleted}`);
 
   if (type === 'Booking_Create' && response) {
     apiMethod = 'POST';
@@ -124,45 +135,52 @@ const sendTo24GolfApi = async (type, url, payload, response = null, accessToken,
       endDateTime = payload.end_datetime;
     }
 
-    // KST 형식 유지 (UTC로 변환하지 않음)
-    if (!startDateTime) {
-      // 현재 시간 KST 형식으로 생성
+    // KST 형식 보장: 타임존이 없는 경우 +09:00 추가
+    if (startDateTime) {
+      if (!startDateTime.includes('Z') && !startDateTime.includes('+')) {
+        startDateTime = `${startDateTime}+09:00`;
+      }
+    } else {
       const now = new Date();
       startDateTime = new Date(now.getTime() + (9 * 60 * 60 * 1000)).toISOString().replace('Z', '+09:00');
     }
 
-    if (!endDateTime) {
+    if (endDateTime) {
+      if (!endDateTime.includes('Z') && !endDateTime.includes('+')) {
+        endDateTime = `${endDateTime}+09:00`;
+      }
+    } else {
       if (startDateTime && startDateTime !== new Date().toISOString()) {
-        // startDateTime이 ISO 문자열이므로 날짜 객체로 파싱
         let endDate;
         if (startDateTime.includes('+09:00')) {
-          // KST 형식인 경우
           endDate = new Date(startDateTime.replace('+09:00', 'Z'));
           endDate.setHours(endDate.getHours() + 1);
           endDateTime = endDate.toISOString().replace('Z', '+09:00');
         } else {
-          // 기본 UTC 형식인 경우 (하지만 이 경우는 거의 없을 것임)
           endDate = new Date(startDateTime);
           endDate.setHours(endDate.getHours() + 1);
-          endDateTime = endDate.toISOString();
+          endDateTime = endDate.toISOString().replace('Z', '+09:00');
         }
       } else {
-        // 현재 시간 + 1시간, KST 형식으로 생성
         const now = new Date();
         endDateTime = new Date(now.getTime() + (10 * 60 * 60 * 1000)).toISOString().replace('Z', '+09:00');
       }
     }
 
+    // 결제 금액 설정
+    const paymentAmount = paymentAmounts.has(bookId) ? paymentAmounts.get(bookId) : 0;
+    console.log(`[DEBUG] Payment Amount for book_id ${bookId}: ${paymentAmount}`);
+
     apiData = {
-      externalId: response.book_id || 'unknown',
+      externalId: bookId,
       name: response.name || 'Unknown',
       phone: response.phone || '010-0000-0000',
       partySize: parseInt(response.person || payload.person || 1, 10),
       startDate: startDateTime,
       endDate: endDateTime,
       roomId: roomId ? roomId.toString() : 'unknown',
-      paymented: isPaymentCompleted, // "결제완료" 상태 반영
-      paymentAmount: 0,
+      paymented: isPaymentCompleted,
+      paymentAmount: paymentAmount,
       crawlingSite: 'KimCaddie'
     };
 
@@ -170,56 +188,62 @@ const sendTo24GolfApi = async (type, url, payload, response = null, accessToken,
     - roomId: ${roomId} (from: ${response.room ? 'response.room' : payload.room ? 'payload.room' : 'not found'})
     - startDate: ${startDateTime} (from: ${response.start_datetime ? 'response.start_datetime' : payload.start_datetime ? 'payload.start_datetime' : 'current time'})
     - endDate: ${endDateTime} (from: ${response.end_datetime ? 'response.end_datetime' : payload.end_datetime ? 'payload.end_datetime' : 'calculated'})
-    `);
+    - paymented: ${isPaymentCompleted} (from: /owner/revenue/ finished)
+    - paymentAmount: ${paymentAmount} (from: /owner/revenue/ response)`);
   } else if (type === 'Booking_Update') {
     apiMethod = 'PATCH';
     apiUrl = `https://api.dev.24golf.co.kr/stores/${STORE_ID}/reservation/crawl`;
     
     let startDateTime = payload.start_datetime || null;
     let endDateTime = payload.end_datetime || null;
-    const roomId = payload.room_id || payload.room || 'unknown'; // room_id 명시적 추출
+    const roomId = payload.room_id || payload.room || 'unknown';
 
     if (payload.start_datetime) {
-      // KST 형식 유지
       startDateTime = payload.start_datetime;
     } else {
-      // 현재 시간 KST 형식으로 생성
       const now = new Date();
       startDateTime = new Date(now.getTime() + (9 * 60 * 60 * 1000)).toISOString().replace('Z', '+09:00');
     }
 
     if (payload.end_datetime) {
-      // KST 형식 유지
       endDateTime = payload.end_datetime;
     } else {
-      // startDateTime으로부터 1시간 후, KST 형식 유지
       let endDate;
       if (startDateTime.includes('+09:00')) {
-        // KST 형식인 경우
         endDate = new Date(startDateTime.replace('+09:00', 'Z'));
         endDate.setHours(endDate.getHours() + 1);
         endDateTime = endDate.toISOString().replace('Z', '+09:00');
       } else {
-        // 기본 UTC 형식인 경우 (하지만 이 경우는 거의 없을 것임)
         endDate = new Date(startDateTime);
         endDate.setHours(endDate.getHours() + 1);
-        endDateTime = endDate.toISOString();
+        endDateTime = endDate.toISOString().replace('Z', '+09:00');
       }
+    }
+
+    if (startDateTime && !startDateTime.includes('Z') && !startDateTime.includes('+')) {
+      startDateTime = `${startDateTime}+09:00`;
+    }
+
+    if (endDateTime && !startDateTime.includes('Z') && !startDateTime.includes('+')) {
+      endDateTime = `${endDateTime}+09:00`;
     }
 
     const name = payload.name || 'Unknown';
     const phone = payload.phone || '010-0000-0000';
 
+    const paymentAmount = paymentAmounts.has(bookId) ? paymentAmounts.get(bookId) : 0;
+    console.log(`[DEBUG] Payment Amount for book_id ${bookId}: ${paymentAmount}`);
+
     apiData = {
-      externalId: payload.externalId || 'unknown',
+      externalId: bookId,
       name: name,
       phone: phone,
       partySize: parseInt(payload.person, 10) || 1,
       startDate: startDateTime,
       endDate: endDateTime,
       roomId: roomId,
-      paymented: false,
-      paymentAmount: 0,
+      paymented: isPaymentCompleted,
+      paymentAmount: paymentAmount,
       crawlingSite: 'KimCaddie'
     };
   } else if (type === 'Booking_Cancel') {
@@ -364,6 +388,9 @@ function createWindow() {
     const processedBookings = new Set();
     let immediateBookable = false;
     const pendingCustomerRequests = new Map();
+    const paymentAmounts = new Map(); // 결제 금액 저장 Map (book_id -> amount)
+    const paymentStatus = new Map(); // 결제 상태 저장 Map (book_id -> finished)
+    const bookIdToIdxMap = new Map(); // book_id와 book_idx 매핑 Map
 
     // 타임아웃 설정 (5분)
     const TIMEOUT_MS = 5 * 60 * 1000;
@@ -415,14 +442,15 @@ function createWindow() {
           console.log(`[DEBUG] Booking_Create Request Captured - URL: ${url}`);
           requestMap.set(url, { method, payload, type: 'Booking_Create' });
         } else if (url.includes('/booking/change_info') && method === 'PATCH' && (!payload.state || payload.state !== 'canceled')) {
-            const bookingId = url.split('/').pop().split('?')[0];
-            payload.externalId = bookingId;
-            console.log(`[DEBUG] Booking_Update Full Payload:`, JSON.stringify(payload, null, 2));
-            await sendTo24GolfApi('Booking_Update', url, payload, null, accessToken, processedBookings, page);
+          const bookingId = url.split('/').pop().split('?')[0];
+          payload.externalId = bookingId;
+          console.log(`[DEBUG] Booking_Update Full Payload:`, JSON.stringify(payload, null, 2));
+          const paymentAmount = await waitForPaymentAmount(bookingId, paymentAmounts);
+          await sendTo24GolfApi('Booking_Update', url, payload, null, accessToken, processedBookings, paymentAmounts, paymentStatus);
         } else if (url.includes('/booking/change_info') && method === 'PATCH' && payload.state === 'canceled') {
           const bookingId = url.split('/').pop().split('?')[0];
           payload.externalId = bookingId;
-          await sendTo24GolfApi('Booking_Cancel', url, payload, null, accessToken, processedBookings, page);
+          await sendTo24GolfApi('Booking_Cancel', url, payload, null, accessToken, processedBookings);
         } else if (url.includes('/booking/confirm_state') && method === 'PATCH') {
           console.log(`[DEBUG] Booking_Confirm Request Captured - URL: ${url}`);
           requestMap.set(url, { method, payload, type: 'Booking_Confirm' });
@@ -439,6 +467,63 @@ function createWindow() {
 
       if (url.startsWith('https://api.kimcaddie.com/api/') && method === 'POST') {
         console.log(`[DEBUG] POST Response Detected - URL: ${url}, Status: ${status}`);
+      }
+
+      // 결제 금액 및 상태 응답 처리
+      if (url.includes('/owner/revenue/') && status === 200 && method === 'POST') {
+        try {
+          const responseData = await response.json();
+          console.log(`[DEBUG] Revenue Response Data:`, JSON.stringify(responseData, null, 2));
+          const postData = request.postData();
+          let payload = {};
+          const contentType = request.headers()['content-type'] || '';
+          if (contentType.includes('multipart/form-data') && postData) {
+            payload = parseMultipartFormData(postData);
+          } else if (contentType.includes('application/json') && postData) {
+            try {
+              payload = JSON.parse(postData);
+            } catch (e) {
+              console.error(`[ERROR] Failed to parse JSON payload: ${e.message}`);
+              payload = postData;
+            }
+          } else {
+            payload = postData || {};
+          }
+
+          const bookIdx = payload.book_idx;
+          const amount = payload.amount ? parseInt(payload.amount, 10) : undefined;
+          const finished = responseData.finished; // /owner/revenue/ 응답에서 finished 값 가져오기
+
+          if (bookIdx) {
+            // book_idx를 book_id로 변환
+            let bookId = null;
+            for (const [bId, bIdx] of bookIdToIdxMap.entries()) {
+              if (bIdx === bookIdx) {
+                bookId = bId;
+                break;
+              }
+            }
+
+            if (bookId) {
+              if (amount !== undefined) {
+                paymentAmounts.set(bookId, amount);
+                console.log(`[INFO] Stored payment amount for book_id ${bookId} (book_idx ${bookIdx}): ${amount}`);
+              }
+              if (finished !== undefined) {
+                paymentStatus.set(bookId, finished);
+                console.log(`[INFO] Stored payment status for book_id ${bookId} (book_idx ${bookIdx}): ${finished}`);
+              }
+              console.log(`[DEBUG] Current paymentAmounts:`, Array.from(paymentAmounts.entries()));
+              console.log(`[DEBUG] Current paymentStatus:`, Array.from(paymentStatus.entries()));
+            } else {
+              console.log(`[WARN] No book_id found for book_idx ${bookIdx}`);
+            }
+          } else {
+            console.log(`[WARN] book_idx missing in /owner/revenue/ request payload:`, JSON.stringify(payload, null, 2));
+          }
+        } catch (e) {
+          console.log(`[DEBUG] Response Parse Failed - URL: ${url}, Error: ${e.message}`);
+        }
       }
 
       // 매장 정보 응답 처리
@@ -469,7 +554,6 @@ function createWindow() {
               const customerName = responseData.name;
               const customerPhone = responseData.phone;
               const requestTime = new Date();
-              // 중복 요청 처리: 기존 요청 덮어쓰기
               pendingCustomerRequests.set(customerId, { 
                 requestTime, 
                 customerName, 
@@ -491,19 +575,15 @@ function createWindow() {
         if (requestData && requestData.type === 'Booking_List') {
           try {
             const responseData = await response.json();
-            //console.log(`[DEBUG] Booking List Response Data:`, JSON.stringify(responseData, null, 2));
-
             if (responseData.results && Array.isArray(responseData.results)) {
               for (const [customerId, customerData] of pendingCustomerRequests.entries()) {
                 const { requestTime, customerName, customerPhone } = customerData;
-                // customerId와 일치하는 예약 찾기
                 const matchingBookings = responseData.results.filter(booking => 
                   booking.customer === customerId && 
                   (booking.immediate_booked || booking.state === 'success')
                 );
 
                 if (matchingBookings.length > 0) {
-                  // reg_date 기준으로 가장 최근 예약 선택
                   const latestBooking = matchingBookings.reduce((latest, booking) => {
                     const bookingTime = new Date(booking.reg_date);
                     const latestTime = latest ? new Date(latest.reg_date) : new Date(0);
@@ -511,11 +591,10 @@ function createWindow() {
                   }, null);
 
                   const bookingTime = new Date(latestBooking.reg_date);
-                  // 고객 요청과 예약 생성 시간 차이 확인 (5분 이내 허용)
-                  const timeDiff = Math.abs(bookingTime - requestTime) / 1000 / 60; // 분 단위 차이
+                  const timeDiff = Math.abs(bookingTime - requestTime) / 1000 / 60;
                   console.log(`[DEBUG] Comparing times for customer ${customerId}: requestTime=${requestTime.toISOString()}, bookingTime=${bookingTime.toISOString()}, timeDiff=${timeDiff} minutes`);
 
-                  if (timeDiff <= 5) { // 5분 이내인 경우 매칭
+                  if (timeDiff <= 5) {
                     console.log(`[INFO] Found latest booking for customer ${customerId}: book_id ${latestBooking.book_id}`);
                     const payload = {
                       start_datetime: latestBooking.start_datetime,
@@ -530,7 +609,7 @@ function createWindow() {
                       is_paid: latestBooking.is_paid,
                       room: latestBooking.room
                     };
-                    await sendTo24GolfApi('Booking_Create', url, payload, responseForBooking, accessToken, processedBookings);
+                    await sendTo24GolfApi('Booking_Create', url, payload, responseForBooking, accessToken, processedBookings, paymentAmounts, paymentStatus);
                     pendingCustomerRequests.delete(customerId);
                     console.log(`[DEBUG] Removed customer ${customerId} from pendingCustomerRequests`);
                   } else {
@@ -556,15 +635,21 @@ function createWindow() {
           try {
             responseData = await response.json();
             console.log(`[DEBUG] Booking_Create Response Data:`, JSON.stringify(responseData, null, 2));
-            if (responseData.book_id) {
+            if (responseData.book_id && responseData.idx) {
               bookingIds.set(responseData.book_id, responseData);
+              bookIdToIdxMap.set(responseData.book_id, responseData.idx.toString());
+              console.log(`[INFO] Mapped book_id ${responseData.book_id} to book_idx ${responseData.idx}`);
+              console.log(`[DEBUG] Current bookIdToIdxMap:`, Array.from(bookIdToIdxMap.entries()));
             }
           } catch (e) {
             console.log(`[DEBUG] Response Parse Failed - URL: ${url}, Error: ${e.message}`);
             responseData = null;
           }
 
-          await sendTo24GolfApi('Booking_Create', url, requestData.payload, responseData, accessToken, processedBookings, page);
+          // 결제 금액과 상태를 대기한 후 sendTo24GolfApi 호출
+          const bookId = responseData?.book_id || 'unknown';
+          const paymentAmount = await waitForPaymentAmount(bookId, paymentAmounts);
+          await sendTo24GolfApi('Booking_Create', url, requestData.payload, responseData, accessToken, processedBookings, paymentAmounts, paymentStatus);
           requestMap.delete(url);
         }
       }
@@ -583,7 +668,6 @@ function createWindow() {
             }
             const responseData = JSON.parse(text);
             console.log(`[DEBUG] Booking_Confirm Response Data:`, JSON.stringify(responseData, null, 2));
-            // 사장님 수락 로직은 다음 단계에서 처리
           } catch (e) {
             console.log(`[DEBUG] Response Parse Failed - URL: ${url}, Error: ${e.message}`);
           }
