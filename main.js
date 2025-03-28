@@ -82,9 +82,6 @@ const checkPaymentCompletedStatus = async (page) => {
     }
   };
 
-// 예약 정보 저장용 Map
-const bookingRoomMap = new Map();
-
 // 24golf API로 데이터 전송
 const sendTo24GolfApi = async (type, url, payload, response = null, accessToken, processedBookings = new Set(), page = null) => {
   if (type === 'Booking_Create' && response && response.book_id && processedBookings.has(response.book_id)) {
@@ -156,10 +153,8 @@ const sendTo24GolfApi = async (type, url, payload, response = null, accessToken,
       }
     }
 
-    const externalId = response.book_id || 'unknown';
-    
     apiData = {
-      externalId: externalId,
+      externalId: response.book_id || 'unknown',
       name: response.name || 'Unknown',
       phone: response.phone || '010-0000-0000',
       partySize: parseInt(response.person || payload.person || 1, 10),
@@ -170,12 +165,6 @@ const sendTo24GolfApi = async (type, url, payload, response = null, accessToken,
       paymentAmount: 0,
       crawlingSite: 'KimCaddie'
     };
-
-    // 예약 생성 시 roomId 정보를 저장해둠
-    if (externalId !== 'unknown' && roomId) {
-      bookingRoomMap.set(externalId, roomId.toString());
-      console.log(`[DEBUG] Stored room information for booking ${externalId}: roomId = ${roomId}`);
-    }
 
     console.log(`[DEBUG] Extracted data for API request:
     - roomId: ${roomId} (from: ${response.room ? 'response.room' : payload.room ? 'payload.room' : 'not found'})
@@ -218,30 +207,11 @@ const sendTo24GolfApi = async (type, url, payload, response = null, accessToken,
       }
     }
 
-<<<<<<< HEAD
-    const externalId = payload.externalId || 'unknown';
-    
-    // roomId 검색 순서: 
-    // 1. payload의 room_id 또는 room
-    // 2. bookingRoomMap에 저장된 값
-    // 3. "unknown"
-    let roomId = 'unknown';
-    if (payload.room_id) {
-      roomId = payload.room_id;
-    } else if (payload.room) {
-      roomId = payload.room;
-    } else if (externalId !== 'unknown' && bookingRoomMap.has(externalId)) {
-      roomId = bookingRoomMap.get(externalId);
-      console.log(`[DEBUG] Using stored room information for booking ${externalId}: roomId = ${roomId}`);
-    }
-
-=======
->>>>>>> 7f804c1 (modified_is_paid)
     const name = payload.name || 'Unknown';
     const phone = payload.phone || '010-0000-0000';
 
     apiData = {
-      externalId: externalId,
+      externalId: payload.externalId || 'unknown',
       name: name,
       phone: phone,
       partySize: parseInt(payload.person, 10) || 1,
@@ -252,8 +222,6 @@ const sendTo24GolfApi = async (type, url, payload, response = null, accessToken,
       paymentAmount: 0,
       crawlingSite: 'KimCaddie'
     };
-    
-    console.log(`[DEBUG] Booking_Update using roomId: ${roomId}`);
   } else if (type === 'Booking_Cancel') {
     apiMethod = 'DELETE';
     apiUrl = `https://api.dev.24golf.co.kr/stores/${STORE_ID}/reservation/crawl`;
@@ -525,16 +493,6 @@ function createWindow() {
             const responseData = await response.json();
             //console.log(`[DEBUG] Booking List Response Data:`, JSON.stringify(responseData, null, 2));
 
-            // 모든 예약 정보에서 room 정보를 추출하여 저장
-            if (responseData.results && Array.isArray(responseData.results)) {
-              responseData.results.forEach(booking => {
-                if (booking.book_id && booking.room) {
-                  bookingRoomMap.set(booking.book_id, booking.room.toString());
-                  console.log(`[DEBUG] Stored room information from booking list: ${booking.book_id} -> room ${booking.room}`);
-                }
-              });
-            }
-
             if (responseData.results && Array.isArray(responseData.results)) {
               for (const [customerId, customerData] of pendingCustomerRequests.entries()) {
                 const { requestTime, customerName, customerPhone } = customerData;
@@ -600,11 +558,6 @@ function createWindow() {
             console.log(`[DEBUG] Booking_Create Response Data:`, JSON.stringify(responseData, null, 2));
             if (responseData.book_id) {
               bookingIds.set(responseData.book_id, responseData);
-              // 예약 생성 시 room 정보 저장
-              if (responseData.room) {
-                bookingRoomMap.set(responseData.book_id, responseData.room.toString());
-                console.log(`[DEBUG] Stored room information from booking creation: ${responseData.book_id} -> room ${responseData.room}`);
-              }
             }
           } catch (e) {
             console.log(`[DEBUG] Response Parse Failed - URL: ${url}, Error: ${e.message}`);
