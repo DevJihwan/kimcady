@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KimCaddie</title>
+  <style>
+    /* GitHub 스타일의 기본 설정 */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+      background-color: #f6f8fa; /* GitHub의 기본 배경색 */
+      color: #24292e; /* GitHub의 기본 텍스트 색상 */
+      line-height: 1.6;
+      padding: 20px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+    }
+
+    .container {
+      max-width: 800px;
+      width: 100%;
+      margin: 0 auto;
+    }
+
+    /* 헤더 스타일 */
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+
+    .header h1 {
+      font-size: 24px;
+      font-weight: 600;
+      color: #24292e;
+    }
+
+    .header .status {
+      font-size: 14px;
+      font-weight: 500;
+      color: #586069; /* GitHub의 보조 텍스트 색상 */
+    }
+
+    /* 카드 스타일 */
+    .card {
+      background-color: #ffffff;
+      border: 1px solid #e1e4e8; /* GitHub의 테두리 색상 */
+      border-radius: 6px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+      padding: 16px;
+      margin-bottom: 16px;
+      transition: box-shadow 0.2s ease;
+    }
+
+    .card:hover {
+      box-shadow: 0 3px 6px rgba(0, 0, 0, 0.1);
+    }
+
+    .card p {
+      font-size: 14px;
+      color: #586069;
+    }
+
+    /* 로그 영역 */
+    .log-section {
+      background-color: #f6f8fa;
+      border: 1px solid #e1e4e8;
+      border-radius: 6px;
+      padding: 16px;
+      max-height: 300px;
+      overflow-y: auto;
+      font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
+      font-size: 12px;
+      color: #24292e;
+    }
+
+    .log-section p {
+      margin: 4px 0;
+    }
+
+    /* 버튼 스타일 (GitHub 스타일) */
+    .btn {
+      display: inline-block;
+      padding: 8px 16px;
+      font-size: 14px;
+      font-weight: 500;
+      color: #ffffff;
+      background-color: #2ea44f; /* GitHub의 기본 버튼 색상 */
+      border: 1px solid #2ea44f;
+      border-radius: 6px;
+      text-decoration: none;
+      cursor: pointer;
+      transition: background-color 0.2s ease;
+    }
+
+    .btn:hover {
+      background-color: #2c974b;
+      border-color: #2c974b;
+    }
+
+    /* 반응형 디자인 */
+    @media (max-width: 600px) {
+      .container {
+        padding: 16px;
+      }
+
+      .header h1 {
+        font-size: 20px;
+      }
+
+      .card {
+        padding: 12px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- 헤더 -->
+    <div class="header">
+      <h1>KimCaddie</h1>
+      <span class="status">상태: 수집 중...</span>
+    </div>
+
+    <!-- 정보 카드 -->
+    <div class="card">
+      <p>KimCaddie 예약 데이터를 수집 중입니다.</p>
+      <p>Chrome 창에서 로그인 및 예약 관리를 진행해주세요.</p>
+    </div>
+
+    <!-- 로그 섹션 -->
+    <div class="log-section" id="log">
+      <p>로그가 여기에 표시됩니다...</p>
+    </div>
+
+    <!-- 버튼 -->
+    <div style="text-align: center; margin-top: 16px;">
+      <button class="btn" onclick="clearLogs()">로그 지우기</button>
+    </div>
+  </div>
+
+  <script>
+    // 로그 추가 함수
+    function addLog(message) {
+      const logSection = document.getElementById('log');
+      const logEntry = document.createElement('p');
+      logEntry.textContent = message;
+      logSection.appendChild(logEntry);
+      logSection.scrollTop = logSection.scrollHeight; // 자동 스크롤
+    }
+
+    // 로그 지우기 함수
+    function clearLogs() {
+      const logSection = document.getElementById('log');
+      logSection.innerHTML = '<p>로그가 여기에 표시됩니다...</p>';
+    }
+
+    // 콘솔 로그를 UI로 리다이렉트 (개발용)
+    (function() {
+      const originalLog = console.log;
+      console.log = function(message) {
+        originalLog.apply(console, arguments);
+        addLog(message);
+      };
+
+      const originalError = console.error;
+      console.error = function(message) {
+        originalError.apply(console, arguments);
+        addLog(`[ERROR] ${message}`);
+      };
+    })();
+  </script>
+</body>
+</html>

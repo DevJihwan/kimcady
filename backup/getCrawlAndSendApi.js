@@ -5,8 +5,6 @@ require('dotenv').config();
 
 // 환경 변수
 const STORE_ID = '6690d7ea750ff9a6689e9af3';
-const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
-
 
 let CHROME_PATH;
 if (process.platform === 'win32') {
@@ -36,12 +34,12 @@ const getAccessToken = async () => {
     console.error('[Token Error] Failed to obtain access token:', error.message);
     if (error.response) {
       console.error('[Token Error] Response status:', error.response.status);
-      console.error('[Token Error] Response data:', error.response.data);
+      console.error('[Token Error] Response data:', JSON.stringify(error.response.data, null, 2));
     }
-    if (ACCESS_TOKEN) {
+    /*if (ACCESS_TOKEN) {
       console.log('[Token] Using fallback access token from .env');
       return ACCESS_TOKEN;
-    }
+    }*/
     throw error;
   }
 };
@@ -107,7 +105,7 @@ const sendTo24GolfApi = async (type, url, payload, response = null, accessToken)
     apiData = {
       externalId: payload.externalId || 'unknown',
       crawlingSite: 'KimCaddie',
-      reason: payload.canceled_by || 'M'
+      reason: payload.canceled_by || 'Canceled by Manager' // reason 필드 값 개선
     };
   }
 
@@ -142,14 +140,16 @@ const sendTo24GolfApi = async (type, url, payload, response = null, accessToken)
     console.error(`[API Error] Failed to send ${type}: ${error.message}`);
     if (error.response) {
       console.error(`[API Error] Response status: ${error.response.status}`);
-      console.error(`[API Error] Response data: ${error.response.data}`);
+      console.error(`[API Error] Response data:`, JSON.stringify(error.response.data, null, 2));
     }
   }
 
+  /*
   // 로컬 JSON 파일 저장
   const dataToSave = { url, payload };
   if (response) dataToSave.response = response;
   fs.writeFileSync(`${type}_${timestamp.replace(/:/g, '-')}.json`, JSON.stringify(dataToSave, null, 2));
+  */
 };
 
 (async () => {
@@ -169,18 +169,25 @@ const sendTo24GolfApi = async (type, url, payload, response = null, accessToken)
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
-      '--window-size=1920,1080' // 창 크기 설정
+      '--window-size=1280,720',
+      '--window-position=0,0'
     ],
-    defaultViewport: null // 기본 뷰포트 비활성화
+    defaultViewport: null
   });
 
   const page = await browser.newPage();
 
   // 뷰포트 설정
   await page.setViewport({
-    width: 1920,
-    height: 1080,
-    deviceScaleFactor: 1 // 축소/확대 비율 1로 설정
+    width: 1280,
+    height: 720,
+    deviceScaleFactor: 1
+  });
+
+  // 창 최대화
+  await page.evaluate(() => {
+    window.moveTo(0, 0);
+    window.resizeTo(screen.availWidth, screen.availHeight);
   });
 
   await page.goto('https://owner.kimcaddie.com/', { waitUntil: 'networkidle2' });
@@ -194,6 +201,11 @@ const sendTo24GolfApi = async (type, url, payload, response = null, accessToken)
     const method = request.method();
     const postData = request.postData();
     const headers = request.headers();
+
+    // 모든 POST 요청 디버깅 로그 추가
+    if (url.startsWith('https://api.kimcaddie.com/api/') && method === 'POST') {
+      console.log(`[DEBUG] POST Request Detected - URL: ${url}, Data: ${postData}`);
+    }
 
     if (url.startsWith('https://api.kimcaddie.com/api/') && (method === 'POST' || method === 'PATCH')) {
       let payload = {};
@@ -210,7 +222,9 @@ const sendTo24GolfApi = async (type, url, payload, response = null, accessToken)
         payload = postData || {};
       }
 
-      if (url.includes('/owner/booking/') && method === 'POST') {
+      // 예약 등록 요청 감지 조건 수정
+      if (url.includes('/owner/booking') && method === 'POST') {
+        console.log(`[DEBUG] Booking_Create Request Captured - URL: ${url}`);
         requestMap.set(url, { method, payload, type: 'Booking_Create' });
       } else if (url.includes('/booking/change_info') && method === 'PATCH' && (!payload.state || payload.state !== 'canceled')) {
         const bookingId = url.split('/').pop().split('?')[0];
@@ -231,12 +245,18 @@ const sendTo24GolfApi = async (type, url, payload, response = null, accessToken)
     const request = response.request();
     const method = request.method();
 
-    if (url === 'https://api.kimcaddie.com/api/owner/booking/' && status === '200' && method === 'POST') {
+    // 응답 디버깅 로그 추가
+    if (url.startsWith('https://api.kimcaddie.com/api/') && method === 'POST') {
+      console.log(`[DEBUG] POST Response Detected - URL: ${url}, Status: ${status}`);
+    }
+
+    if (url.includes('/owner/booking') && status === 200 && method === 'POST') {
       const requestData = requestMap.get(url);
       if (requestData && requestData.type === 'Booking_Create') {
         let responseData;
         try {
           responseData = await response.json();
+          console.log(`[DEBUG] Booking_Create Response Data:`, JSON.stringify(responseData, null, 2));
           if (responseData.book_id) {
             bookingIds.set(responseData.book_id, responseData);
           }
