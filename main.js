@@ -82,29 +82,97 @@ const sendTo24GolfApi = async (type, url, payload, response = null, accessToken,
   if (type === 'Booking_Create' && response) {
     apiMethod = 'POST';
     apiUrl = `https://api.dev.24golf.co.kr/stores/${STORE_ID}/reservation/crawl`;
+
+    // response에서 필요한 데이터 추출
+    // 1. room 값 확인 (response.room 우선 사용, 없으면 payload에서 가져옴)
+    const roomId = response.room || (payload && payload.room) || null;
+    
+    // 2. 시작 및 종료 시간 확인 (response.start_datetime/end_datetime 우선 사용)
+    let startDateTime = null;
+    let endDateTime = null;
+
+    // response에서 시간 데이터 추출
+    if (response.start_datetime) {
+      startDateTime = response.start_datetime;
+    } else if (payload && payload.start_datetime) {
+      startDateTime = payload.start_datetime;
+    }
+
+    if (response.end_datetime) {
+      endDateTime = response.end_datetime;
+    } else if (payload && payload.end_datetime) {
+      endDateTime = payload.end_datetime;
+    }
+
+    // 시간 데이터가 있으면 포맷 변환 (Z로 끝나도록)
+    if (startDateTime) {
+      startDateTime = startDateTime.endsWith('Z') ? startDateTime : startDateTime.replace('+09:00', 'Z');
+    } else {
+      startDateTime = new Date().toISOString();
+    }
+
+    if (endDateTime) {
+      endDateTime = endDateTime.endsWith('Z') ? endDateTime : endDateTime.replace('+09:00', 'Z');
+    } else {
+      // 종료 시간이 없는 경우, 시작 시간이 있으면 시작 시간 + 1시간, 아니면 현재 시간
+      if (startDateTime && startDateTime !== new Date().toISOString()) {
+        const endDate = new Date(startDateTime);
+        endDate.setHours(endDate.getHours() + 1);
+        endDateTime = endDate.toISOString();
+      } else {
+        endDateTime = new Date().toISOString();
+      }
+    }
+
+    // 데이터 준비
     apiData = {
       externalId: response.book_id || 'unknown',
       name: response.name || 'Unknown',
       phone: response.phone || '010-0000-0000',
-      partySize: parseInt(payload.person, 10) || 1,
-      startDate: payload.start_datetime ? payload.start_datetime.replace('+09:00', 'Z') : new Date().toISOString(),
-      endDate: payload.end_datetime ? payload.end_datetime.replace('+09:00', 'Z') : new Date().toISOString(),
-      roomId: payload.room_id || payload.room || 'unknown',
+      partySize: parseInt(response.person || payload.person || 1, 10),
+      startDate: startDateTime,
+      endDate: endDateTime,
+      roomId: roomId ? roomId.toString() : 'unknown',
       paymented: response.is_paid || false,
       paymentAmount: 0,
       crawlingSite: 'KimCaddie'
     };
+
+    console.log(`[DEBUG] Extracted data for API request:
+    - roomId: ${roomId} (from: ${response.room ? 'response.room' : payload.room ? 'payload.room' : 'not found'})
+    - startDate: ${startDateTime} (from: ${response.start_datetime ? 'response.start_datetime' : payload.start_datetime ? 'payload.start_datetime' : 'current time'})
+    - endDate: ${endDateTime} (from: ${response.end_datetime ? 'response.end_datetime' : payload.end_datetime ? 'payload.end_datetime' : 'calculated'})
+    `);
   } else if (type === 'Booking_Update') {
     apiMethod = 'PATCH';
     apiUrl = `https://api.dev.24golf.co.kr/stores/${STORE_ID}/reservation/crawl`;
+    
+    // 시작 및 종료 시간 확인
+    let startDateTime = null;
+    let endDateTime = null;
+
+    if (payload.start_datetime) {
+      startDateTime = payload.start_datetime.endsWith('Z') ? payload.start_datetime : payload.start_datetime.replace('+09:00', 'Z');
+    } else {
+      startDateTime = new Date().toISOString();
+    }
+
+    if (payload.end_datetime) {
+      endDateTime = payload.end_datetime.endsWith('Z') ? payload.end_datetime : payload.end_datetime.replace('+09:00', 'Z');
+    } else {
+      const endDate = new Date(startDateTime);
+      endDate.setHours(endDate.getHours() + 1);
+      endDateTime = endDate.toISOString();
+    }
+
     apiData = {
       externalId: payload.externalId || 'unknown',
       name: 'Unknown',
       phone: '010-0000-0000',
       partySize: parseInt(payload.person, 10) || 1,
-      startDate: payload.start_datetime ? payload.start_datetime.replace('+09:00', 'Z') : new Date().toISOString(),
-      endDate: payload.end_datetime ? payload.end_datetime.replace('+09:00', 'Z') : new Date().toISOString(),
-      roomId: payload.room_id || 'unknown',
+      startDate: startDateTime,
+      endDate: endDateTime,
+      roomId: payload.room_id || payload.room || 'unknown',
       paymented: false,
       paymentAmount: 0,
       crawlingSite: 'KimCaddie'
