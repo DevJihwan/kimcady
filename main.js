@@ -244,7 +244,7 @@ function createWindow() {
 
         // 매장 정보 요청 감지
         if (url.includes('/owner/shop/-/') && method === 'GET') {
-          console.log(`[DEBUG] Shop Info Request Captured - URL: ${url}`);
+          //console.log(`[DEBUG] Shop Info Request Captured - URL: ${url}`);
           requestMap.set(url, { method, payload, type: 'Shop_Info' });
         }
         // 고객 요청 감지
@@ -254,7 +254,7 @@ function createWindow() {
         }
         // 예약 목록 요청 감지
         else if (url.includes('/owner/booking/') && method === 'GET') {
-          console.log(`[DEBUG] Booking List Request Captured - URL: ${url}`);
+          //console.log(`[DEBUG] Booking List Request Captured - URL: ${url}`);
           requestMap.set(url, { method, payload, type: 'Booking_List' });
         }
         // 직접 예약 등록 요청 감지
@@ -315,7 +315,7 @@ function createWindow() {
         if (requestData && requestData.type === 'Customer_Request') {
           try {
             const responseData = await response.json();
-            console.log(`[DEBUG] Customer Request Response Data:`, JSON.stringify(responseData, null, 2));
+            //console.log(`[DEBUG] Customer Request Response Data:`, JSON.stringify(responseData, null, 2));
             if (immediateBookable) {
               const customerId = responseData.id;
               const requestTime = new Date(); // 요청 시간 기록
@@ -335,7 +335,7 @@ function createWindow() {
         if (requestData && requestData.type === 'Booking_List') {
           try {
             const responseData = await response.json();
-            console.log(`[DEBUG] Booking List Response Data:`, JSON.stringify(responseData, null, 2));
+            //console.log(`[DEBUG] Booking List Response Data:`, JSON.stringify(responseData, null, 2));
 
             // 예약 목록 순회
             if (responseData.results && Array.isArray(responseData.results)) {
