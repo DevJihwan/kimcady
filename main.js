@@ -64,40 +64,17 @@ const parseMultipartFormData = (data) => {
   return result;
 };
 
-// book_id에 대한 결제 금액을 대기하는 함수
-const waitForPaymentAmount = async (bookId, paymentAmounts, timeout = 30000) => {
-  const start = Date.now();
-  while (Date.now() - start < timeout) {
-    if (paymentAmounts.has(bookId)) {
-      const amount = paymentAmounts.get(bookId);
-      console.log(`[INFO] Found payment amount for book_id ${bookId}: ${amount}`);
-      return amount;
-    }
-    console.log(`[DEBUG] Waiting for payment amount for book_id ${bookId}, current paymentAmounts:`, Array.from(paymentAmounts.entries()));
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
-  console.log(`[WARN] Timeout waiting for payment amount for book_id ${bookId}`);
-  return 0; // 타임아웃 시 기본값 0 반환
-};
-
-// book_id에 대한 결제 상태를 대기하는 함수
-const waitForPaymentStatus = async (bookId, paymentStatus, timeout = 30000) => {
-  const start = Date.now();
-  while (Date.now() - start < timeout) {
-    if (paymentStatus.has(bookId)) {
-      const status = paymentStatus.get(bookId);
-      console.log(`[INFO] Found payment status for book_id ${bookId}: ${status}`);
-      return status;
-    }
-    console.log(`[DEBUG] Waiting for payment status for book_id ${bookId}, current paymentStatus:`, Array.from(paymentStatus.entries()));
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
-  console.log(`[WARN] Timeout waiting for payment status for book_id ${bookId}`);
-  return false; // 타임아웃 시 기본값 false 반환
-};
-
 // 24golf API로 데이터 전송
-const sendTo24GolfApi = async (type, url, payload, response = null, accessToken, processedBookings = new Set(), paymentAmounts = new Map(), paymentStatus = new Map()) => {
+const sendTo24GolfApi = async (
+  type,
+  url,
+  payload,
+  response = null,
+  accessToken,
+  processedBookings = new Set(),
+  paymentAmounts = new Map(),
+  paymentStatus = new Map()
+) => {
   if (type === 'Booking_Create' && response && response.book_id && processedBookings.has(response.book_id)) {
     console.log(`[INFO] Booking_Create already processed for book_id: ${response.book_id}, skipping...`);
     return;
@@ -110,34 +87,18 @@ const sendTo24GolfApi = async (type, url, payload, response = null, accessToken,
   let apiMethod, apiUrl, apiData;
   const headers = { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' };
 
-  // 결제 상태를 paymentStatus Map에서 가져오기
-  let isPaymentCompleted = false;
   const bookId = response?.book_id || payload?.externalId || 'unknown';
-  isPaymentCompleted = await waitForPaymentStatus(bookId, paymentStatus);
-  console.log(`isPaymentCompleted (from /owner/revenue/ finished): ${isPaymentCompleted}`);
+  const paymentAmount = paymentAmounts.has(bookId) ? paymentAmounts.get(bookId) : 0;
+  const isPaymentCompleted = paymentStatus.has(bookId) ? paymentStatus.get(bookId) : false;
 
   if (type === 'Booking_Create' && response) {
     apiMethod = 'POST';
     apiUrl = `https://api.dev.24golf.co.kr/stores/${STORE_ID}/reservation/crawl`;
 
     const roomId = response.room || (payload && payload.room) || null;
-    
-    let startDateTime = null;
-    let endDateTime = null;
+    let startDateTime = response.start_datetime || (payload && payload.start_datetime) || null;
+    let endDateTime = response.end_datetime || (payload && payload.end_datetime) || null;
 
-    if (response.start_datetime) {
-      startDateTime = response.start_datetime;
-    } else if (payload && payload.start_datetime) {
-      startDateTime = payload.start_datetime;
-    }
-
-    if (response.end_datetime) {
-      endDateTime = response.end_datetime;
-    } else if (payload && payload.end_datetime) {
-      endDateTime = payload.end_datetime;
-    }
-
-    // KST 형식 보장: 타임존이 없는 경우 +09:00 추가
     if (startDateTime) {
       if (!startDateTime.includes('Z') && !startDateTime.includes('+')) {
         startDateTime = `${startDateTime}+09:00`;
@@ -169,10 +130,6 @@ const sendTo24GolfApi = async (type, url, payload, response = null, accessToken,
       }
     }
 
-    // 결제 금액 설정
-    const paymentAmount = paymentAmounts.has(bookId) ? paymentAmounts.get(bookId) : 0;
-    console.log(`[DEBUG] Payment Amount for book_id ${bookId}: ${paymentAmount}`);
-
     apiData = {
       externalId: bookId,
       name: response.name || 'Unknown',
@@ -190,12 +147,12 @@ const sendTo24GolfApi = async (type, url, payload, response = null, accessToken,
     - roomId: ${roomId} (from: ${response.room ? 'response.room' : payload.room ? 'payload.room' : 'not found'})
     - startDate: ${startDateTime} (from: ${response.start_datetime ? 'response.start_datetime' : payload.start_datetime ? 'payload.start_datetime' : 'current time'})
     - endDate: ${endDateTime} (from: ${response.end_datetime ? 'response.end_datetime' : payload.end_datetime ? 'payload.end_datetime' : 'calculated'})
-    - paymented: ${isPaymentCompleted} (from: /owner/revenue/ finished)
-    - paymentAmount: ${paymentAmount} (from: /owner/revenue/ response)`);
+    - paymented: ${isPaymentCompleted} (from: paymentStatus Map)
+    - paymentAmount: ${paymentAmount} (from: paymentAmounts Map)`);
   } else if (type === 'Booking_Update') {
     apiMethod = 'PATCH';
     apiUrl = `https://api.dev.24golf.co.kr/stores/${STORE_ID}/reservation/crawl`;
-    
+
     let startDateTime = payload.start_datetime || null;
     let endDateTime = payload.end_datetime || null;
     const roomId = payload.room_id || payload.room || 'unknown';
@@ -226,15 +183,12 @@ const sendTo24GolfApi = async (type, url, payload, response = null, accessToken,
       startDateTime = `${startDateTime}+09:00`;
     }
 
-    if (endDateTime && !startDateTime.includes('Z') && !startDateTime.includes('+')) {
+    if (endDateTime && !endDateTime.includes('Z') && !endDateTime.includes('+')) {
       endDateTime = `${endDateTime}+09:00`;
     }
 
     const name = payload.name || 'Unknown';
     const phone = payload.phone || '010-0000-0000';
-
-    const paymentAmount = paymentAmounts.has(bookId) ? paymentAmounts.get(bookId) : 0;
-    console.log(`[DEBUG] Payment Amount for book_id ${bookId}: ${paymentAmount}`);
 
     apiData = {
       externalId: bookId,
@@ -264,7 +218,16 @@ const sendTo24GolfApi = async (type, url, payload, response = null, accessToken,
       return;
     }
   } else {
-    if (apiData && (apiData.externalId === 'unknown' || !apiData.crawlingSite || !apiData.name || !apiData.phone || !apiData.partySize || !apiData.startDate || !apiData.endDate || !apiData.roomId)) {
+    if (apiData && (
+      apiData.externalId === 'unknown' || 
+      !apiData.crawlingSite || 
+      !apiData.name || 
+      !apiData.phone || 
+      !apiData.partySize || 
+      !apiData.startDate || 
+      !apiData.endDate || 
+      !apiData.roomId
+    )) {
       console.error(`[Validation Error] Missing required fields for ${type}:`, apiData);
       return;
     }
@@ -390,9 +353,10 @@ function createWindow() {
     const processedBookings = new Set();
     let immediateBookable = false;
     const pendingCustomerRequests = new Map();
-    const paymentAmounts = new Map(); // 결제 금액 저장 Map (book_id -> amount)
-    const paymentStatus = new Map(); // 결제 상태 저장 Map (book_id -> finished)
-    const bookIdToIdxMap = new Map(); // book_id와 book_idx 매핑 Map
+    const paymentAmounts = new Map();
+    const paymentStatus = new Map();
+    const bookIdToIdxMap = new Map();
+    const bookingDataMap = new Map(); // Booking_Create 데이터 임시 저장
 
     // 타임아웃 설정 (5분)
     const TIMEOUT_MS = 5 * 60 * 1000;
@@ -404,6 +368,13 @@ function createWindow() {
           pendingCustomerRequests.delete(customerId);
         }
       }
+      // bookingDataMap 타임아웃 처리
+      for (const [bookId, { timestamp }] of bookingDataMap.entries()) {
+        if (now - timestamp > TIMEOUT_MS) {
+          console.log(`[INFO] Timeout: Removing pending booking data for book_id ${bookId}`);
+          bookingDataMap.delete(bookId);
+        }
+      }
     }, 60000);
 
     // API 요청 감지
@@ -413,7 +384,7 @@ function createWindow() {
       const postData = request.postData();
       const headers = request.headers();
 
-      if (url.startsWith('https://api.kimcaddie.com/api/') && method === 'POST') {
+      if (url.startsWith('https://a/api.kimcaddie.com/api/') && method === 'POST') {
         console.log(`[DEBUG] POST Request Detected - URL: ${url}, Data: ${postData}`);
       }
 
@@ -433,11 +404,10 @@ function createWindow() {
           payload = postData || {};
         }
 
-        // /owner/revenue/ 요청의 postData에서 amount와 finished를 추출하여 Map 업데이트
         if (url.includes('/owner/revenue/') && method === 'POST') {
           const bookIdx = payload.book_idx;
           const amount = payload.amount ? parseInt(payload.amount, 10) : undefined;
-          const finished = payload.finished === 'true'; // postData에서 finished 값 추출
+          const finished = payload.finished === 'true';
 
           if (bookIdx) {
             let bookId = null;
@@ -450,9 +420,8 @@ function createWindow() {
 
             if (bookId) {
               if (amount !== undefined) {
-                const previousAmount = paymentAmounts.has(bookId) ? paymentAmounts.get(bookId) : null;
                 paymentAmounts.set(bookId, amount);
-                console.log(`[INFO] Updated payment amount for book_id ${bookId} (book_idx ${bookIdx}) from ${previousAmount} to ${amount} (from /owner/revenue/ postData)`);
+                console.log(`[INFO] Updated payment amount for book_id ${bookId} (book_idx ${bookIdx}) to ${amount} (from /owner/revenue/ postData)`);
               }
               if (finished !== undefined) {
                 paymentStatus.set(bookId, finished);
@@ -463,8 +432,6 @@ function createWindow() {
             } else {
               console.log(`[WARN] No book_id found for book_idx ${bookIdx}`);
             }
-          } else {
-            console.log(`[WARN] book_idx missing in /owner/revenue/ request payload:`, JSON.stringify(payload, null, 2));
           }
         }
 
@@ -482,8 +449,6 @@ function createWindow() {
           const bookingId = url.split('/').pop().split('?')[0];
           payload.externalId = bookingId;
           console.log(`[DEBUG] Booking_Update Full Payload:`, JSON.stringify(payload, null, 2));
-
-          const paymentAmount = await waitForPaymentAmount(bookingId, paymentAmounts);
           await sendTo24GolfApi('Booking_Update', url, payload, null, accessToken, processedBookings, paymentAmounts, paymentStatus);
         } else if (url.includes('/booking/change_info') && method === 'PATCH' && payload.state === 'canceled') {
           const bookingId = url.split('/').pop().split('?')[0];
@@ -507,7 +472,6 @@ function createWindow() {
         console.log(`[DEBUG] POST Response Detected - URL: ${url}, Status: ${status}`);
       }
 
-      // 결제 금액 및 상태 응답 처리 (postData에서 이미 처리했으므로 추가 업데이트는 선택적)
       if (url.includes('/owner/revenue/') && status === 200 && method === 'POST') {
         try {
           const responseData = await response.json();
@@ -518,19 +482,12 @@ function createWindow() {
           if (contentType.includes('multipart/form-data') && postData) {
             payload = parseMultipartFormData(postData);
           } else if (contentType.includes('application/json') && postData) {
-            try {
-              payload = JSON.parse(postData);
-            } catch (e) {
-              console.error(`[ERROR] Failed to parse JSON payload: ${e.message}`);
-              payload = postData;
-            }
-          } else {
-            payload = postData || {};
+            payload = JSON.parse(postData);
           }
 
           const bookIdx = payload.book_idx;
           const amount = payload.amount ? parseInt(payload.amount, 10) : undefined;
-          const finished = responseData.finished; // /owner/revenue/ 응답에서 finished 값 가져오기
+          const finished = responseData.finished || payload.finished === 'true';
 
           if (bookIdx) {
             let bookId = null;
@@ -543,9 +500,8 @@ function createWindow() {
 
             if (bookId) {
               if (amount !== undefined) {
-                const previousAmount = paymentAmounts.has(bookId) ? paymentAmounts.get(bookId) : null;
-                paymentAmounts.set(bookId, amount); // 항상 최신 금액으로 덮어쓰기
-                console.log(`[INFO] Updated payment amount for book_id ${bookId} (book_idx ${bookIdx}) from ${previousAmount} to ${amount} (from /owner/revenue/ response)`);
+                paymentAmounts.set(bookId, amount);
+                console.log(`[INFO] Updated payment amount for book_id ${bookId} (book_idx ${bookIdx}) to ${amount} (from /owner/revenue/ response)`);
               }
               if (finished !== undefined) {
                 paymentStatus.set(bookId, finished);
@@ -553,18 +509,32 @@ function createWindow() {
               }
               console.log(`[DEBUG] Current paymentAmounts:`, Array.from(paymentAmounts.entries()));
               console.log(`[DEBUG] Current paymentStatus:`, Array.from(paymentStatus.entries()));
+
+              // Booking_Create 데이터가 있으면 처리
+              if (bookingDataMap.has(bookId)) {
+                const { payload, response: bookingResponse } = bookingDataMap.get(bookId);
+                await sendTo24GolfApi(
+                  'Booking_Create',
+                  url,
+                  payload,
+                  bookingResponse,
+                  accessToken,
+                  processedBookings,
+                  paymentAmounts,
+                  paymentStatus
+                );
+                bookingDataMap.delete(bookId);
+                console.log(`[INFO] Processed Booking_Create for book_id ${bookId} after revenue update`);
+              }
             } else {
               console.log(`[WARN] No book_id found for book_idx ${bookIdx}`);
             }
-          } else {
-            console.log(`[WARN] book_idx missing in /owner/revenue/ request payload:`, JSON.stringify(payload, null, 2));
           }
         } catch (e) {
           console.log(`[DEBUG] Response Parse Failed - URL: ${url}, Error: ${e.message}`);
         }
       }
 
-      // 매장 정보 응답 처리
       if (url.includes('/owner/shop/-/') && status === 200 && method === 'GET') {
         const requestData = requestMap.get(url);
         if (requestData && requestData.type === 'Shop_Info') {
@@ -580,7 +550,6 @@ function createWindow() {
         }
       }
 
-      // 고객 요청 응답 처리
       if (url.includes('/owner/customer/') && status === 200 && method === 'GET') {
         const requestData = requestMap.get(url);
         if (requestData && requestData.type === 'Customer_Request') {
@@ -598,7 +567,6 @@ function createWindow() {
                 customerPhone 
               });
               console.log(`[INFO] Immediate booking detected for customer ${customerId}. Waiting for booking details...`);
-              console.log(`[DEBUG] Current pendingCustomerRequests:`, Array.from(pendingCustomerRequests.entries()));
             }
           } catch (e) {
             console.log(`[DEBUG] Response Parse Failed - URL: ${url}, Error: ${e.message}`);
@@ -607,7 +575,6 @@ function createWindow() {
         }
       }
 
-      // 예약 목록 응답 처리
       if (url.includes('/owner/booking/') && status === 200 && method === 'GET') {
         const requestData = requestMap.get(url);
         if (requestData && requestData.type === 'Booking_List') {
@@ -630,8 +597,6 @@ function createWindow() {
 
                   const bookingTime = new Date(latestBooking.reg_date);
                   const timeDiff = Math.abs(bookingTime - requestTime) / 1000 / 60;
-                  console.log(`[DEBUG] Comparing times for customer ${customerId}: requestTime=${requestTime.toISOString()}, bookingTime=${bookingTime.toISOString()}, timeDiff=${timeDiff} minutes`);
-
                   if (timeDiff <= 5) {
                     console.log(`[INFO] Found latest booking for customer ${customerId}: book_id ${latestBooking.book_id}`);
                     const payload = {
@@ -649,12 +614,7 @@ function createWindow() {
                     };
                     await sendTo24GolfApi('Booking_Create', url, payload, responseForBooking, accessToken, processedBookings, paymentAmounts, paymentStatus);
                     pendingCustomerRequests.delete(customerId);
-                    console.log(`[DEBUG] Removed customer ${customerId} from pendingCustomerRequests`);
-                  } else {
-                    console.log(`[DEBUG] Booking time difference too large for customer ${customerId}: ${timeDiff} minutes`);
                   }
-                } else {
-                  console.log(`[DEBUG] No matching bookings found for customer ${customerId}`);
                 }
               }
             }
@@ -665,7 +625,6 @@ function createWindow() {
         }
       }
 
-      // 직접 예약 등록 응답 처리
       if (url.includes('/owner/booking') && status === 200 && method === 'POST') {
         const requestData = requestMap.get(url);
         if (requestData && requestData.type === 'Booking_Create') {
@@ -677,22 +636,39 @@ function createWindow() {
               bookingIds.set(responseData.book_id, responseData);
               bookIdToIdxMap.set(responseData.book_id, responseData.idx.toString());
               console.log(`[INFO] Mapped book_id ${responseData.book_id} to book_idx ${responseData.idx}`);
-              console.log(`[DEBUG] Current bookIdToIdxMap:`, Array.from(bookIdToIdxMap.entries()));
+
+              // Booking_Create 데이터를 임시 저장
+              bookingDataMap.set(responseData.book_id, {
+                payload: requestData.payload,
+                response: responseData,
+                timestamp: new Date()
+              });
+              console.log(`[INFO] Stored Booking_Create data for book_id ${responseData.book_id}`);
+
+              // 결제 데이터가 이미 있으면 바로 처리
+              const bookId = responseData.book_id;
+              if (paymentAmounts.has(bookId) && paymentStatus.has(bookId)) {
+                await sendTo24GolfApi(
+                  'Booking_Create',
+                  url,
+                  requestData.payload,
+                  responseData,
+                  accessToken,
+                  processedBookings,
+                  paymentAmounts,
+                  paymentStatus
+                );
+                bookingDataMap.delete(bookId);
+                console.log(`[INFO] Processed Booking_Create for book_id ${bookId} immediately`);
+              }
             }
           } catch (e) {
             console.log(`[DEBUG] Response Parse Failed - URL: ${url}, Error: ${e.message}`);
-            responseData = null;
           }
-
-          // 결제 금액과 상태를 대기한 후 sendTo24GolfApi 호출
-          const bookId = responseData?.book_id || 'unknown';
-          const paymentAmount = await waitForPaymentAmount(bookId, paymentAmounts);
-          await sendTo24GolfApi('Booking_Create', url, requestData.payload, responseData, accessToken, processedBookings, paymentAmounts, paymentStatus);
           requestMap.delete(url);
         }
       }
 
-      // 사장님 수락 응답 처리 (일단 제외)
       if (url.includes('/booking/confirm_state') && status === 200 && method === 'PATCH') {
         const requestData = requestMap.get(url);
         if (requestData && requestData.type === 'Booking_Confirm') {
@@ -701,11 +677,10 @@ function createWindow() {
             console.log(`[DEBUG] Raw response from /booking/confirm_state: ${text}`);
             if (!text) {
               console.log(`[WARN] Empty response from /booking/confirm_state`);
-              requestMap.delete(url);
-              return;
+            } else {
+              const responseData = JSON.parse(text);
+              console.log(`[DEBUG] Booking_Confirm Response Data:`, JSON.stringify(responseData, null, 2));
             }
-            const responseData = JSON.parse(text);
-            console.log(`[DEBUG] Booking_Confirm Response Data:`, JSON.stringify(responseData, null, 2));
           } catch (e) {
             console.log(`[DEBUG] Response Parse Failed - URL: ${url}, Error: ${e.message}`);
           }
