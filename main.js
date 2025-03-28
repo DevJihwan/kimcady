@@ -1,4 +1,4 @@
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, screen } = require('electron');
 const path = require('path');
 const puppeteer = require('puppeteer-core');
 const fs = require('fs');
@@ -161,13 +161,30 @@ const sendTo24GolfApi = async (type, url, payload, response = null, accessToken,
 
 // Electron 창 생성
 function createWindow() {
+  // 화면 크기 가져오기
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const { width, height } = primaryDisplay.workAreaSize;
+  
+  console.log(`[INFO] Screen dimensions: ${width}x${height}`);
+
+  // 창 생성 시 전체 화면으로 설정
   const win = new BrowserWindow({
-    width: 1280,
-    height: 720,
+    width: width,
+    height: height,
+    x: 0,
+    y: 0,
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false
-    }
+    },
+    show: false // 준비되기 전까지 보이지 않게 설정
+  });
+
+  // 창 로드 완료 후 표시
+  win.once('ready-to-show', () => {
+    win.show();
+    win.maximize(); // 창 최대화
+    console.log('[INFO] Electron window maximized');
   });
 
   win.loadFile('index.html');
@@ -189,26 +206,57 @@ function createWindow() {
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
-        '--window-size=1280,720',
-        '--window-position=0,0'
+        '--start-maximized', // 최대화된 창으로 시작
+        `--window-size=${width},${height}`, // 실제 화면 크기로 설정
+        '--window-position=0,0',
+        '--disable-notifications', // 알림 비활성화
+        '--disable-infobars' // 정보 표시줄 비활성화
       ],
-      defaultViewport: null
+      defaultViewport: null // 뷰포트 자동 조정 허용
     });
 
-    const page = await browser.newPage();
+    // 브라우저 페이지 가져오기 및 크기 조정
+    const pages = await browser.pages();
+    const page = pages[0] || await browser.newPage();
 
+    // 뷰포트 크기 설정
     await page.setViewport({
-      width: 1280,
-      height: 720,
+      width: width,
+      height: height,
       deviceScaleFactor: 1
     });
 
-    await page.evaluate(() => {
-      window.moveTo(0, 0);
-      window.resizeTo(screen.availWidth, screen.availHeight);
+    // 브라우저 창 최대화
+    try {
+      // 창 최대화 시도 1
+      await page._client.send('Browser.setWindowBounds', {
+        windowId: 1,
+        bounds: { windowState: 'maximized' }
+      });
+    } catch (e) {
+      console.log('[DEBUG] First maximize method failed, trying alternative method');
+      
+      // 창 최대화 시도 2
+      await page.evaluate(() => {
+        window.moveTo(0, 0);
+        window.resizeTo(window.screen.availWidth, window.screen.availHeight);
+        if (window.screen) {
+          window.moveTo(0, 0);
+          window.resizeTo(
+            window.screen.availWidth,
+            window.screen.availHeight
+          );
+        }
+      });
+    }
+
+    // 사이트 접속
+    await page.goto('https://owner.kimcaddie.com/', { 
+      waitUntil: 'networkidle2',
+      timeout: 60000 // 타임아웃 60초로 설정
     });
 
-    await page.goto('https://owner.kimcaddie.com/', { waitUntil: 'networkidle2' });
+    console.log('[INFO] Browser launched and navigated to kimcaddie site');
 
     const requestMap = new Map();
     const bookingIds = new Map();
@@ -424,6 +472,22 @@ function createWindow() {
           requestMap.delete(url);
         }
       }
+    });
+
+    // 페이지 로드 완료 후 추가 최대화 스크립트 실행
+    page.on('load', async () => {
+      console.log('[INFO] Page loaded, applying maximization...');
+      await page.evaluate(() => {
+        document.documentElement.style.overflow = 'auto';
+        document.body.style.overflow = 'auto';
+        if (window.screen) {
+          window.moveTo(0, 0);
+          window.resizeTo(
+            window.screen.availWidth,
+            window.screen.availHeight
+          );
+        }
+      });
     });
 
     console.log('브라우저가 열렸습니다. 로그인 및 예약 관리를 진행해주세요.');
