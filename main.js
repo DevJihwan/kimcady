@@ -55,7 +55,7 @@ const parseMultipartFormData = (data) => {
   const parts = data.split(boundary).slice(1, -1);
 
   parts.forEach(part => {
-    const match = part.match(/name="([^"]+)"\r\n\r\n(.+?)(?=\r\n|$)/);
+    const match = part.match(/name=\"([^\"]+)\"\\r\\n\\r\\n(.+?)(?=\\r\\n|$)/);
     if (match) {
       const [, key, value] = match;
       result[key] = value;
@@ -99,21 +99,32 @@ const sendTo24GolfApi = async (type, url, payload, response = null, accessToken,
       endDateTime = payload.end_datetime;
     }
 
-    if (startDateTime) {
-      startDateTime = startDateTime.endsWith('Z') ? startDateTime : startDateTime.replace('+09:00', 'Z');
-    } else {
-      startDateTime = new Date().toISOString();
+    // KST 형식 유지 (UTC로 변환하지 않음)
+    if (!startDateTime) {
+      // 현재 시간 KST 형식으로 생성
+      const now = new Date();
+      startDateTime = new Date(now.getTime() + (9 * 60 * 60 * 1000)).toISOString().replace('Z', '+09:00');
     }
 
-    if (endDateTime) {
-      endDateTime = endDateTime.endsWith('Z') ? endDateTime : endDateTime.replace('+09:00', 'Z');
-    } else {
+    if (!endDateTime) {
       if (startDateTime && startDateTime !== new Date().toISOString()) {
-        const endDate = new Date(startDateTime);
-        endDate.setHours(endDate.getHours() + 1);
-        endDateTime = endDate.toISOString();
+        // startDateTime이 ISO 문자열이므로 날짜 객체로 파싱
+        let endDate;
+        if (startDateTime.includes('+09:00')) {
+          // KST 형식인 경우
+          endDate = new Date(startDateTime.replace('+09:00', 'Z'));
+          endDate.setHours(endDate.getHours() + 1);
+          endDateTime = endDate.toISOString().replace('Z', '+09:00');
+        } else {
+          // 기본 UTC 형식인 경우 (하지만 이 경우는 거의 없을 것임)
+          endDate = new Date(startDateTime);
+          endDate.setHours(endDate.getHours() + 1);
+          endDateTime = endDate.toISOString();
+        }
       } else {
-        endDateTime = new Date().toISOString();
+        // 현재 시간 + 1시간, KST 형식으로 생성
+        const now = new Date();
+        endDateTime = new Date(now.getTime() + (10 * 60 * 60 * 1000)).toISOString().replace('Z', '+09:00');
       }
     }
 
@@ -143,17 +154,31 @@ const sendTo24GolfApi = async (type, url, payload, response = null, accessToken,
     let endDateTime = null;
 
     if (payload.start_datetime) {
-      startDateTime = payload.start_datetime.endsWith('Z') ? payload.start_datetime : payload.start_datetime.replace('+09:00', 'Z');
+      // KST 형식 유지
+      startDateTime = payload.start_datetime;
     } else {
-      startDateTime = new Date().toISOString();
+      // 현재 시간 KST 형식으로 생성
+      const now = new Date();
+      startDateTime = new Date(now.getTime() + (9 * 60 * 60 * 1000)).toISOString().replace('Z', '+09:00');
     }
 
     if (payload.end_datetime) {
-      endDateTime = payload.end_datetime.endsWith('Z') ? payload.end_datetime : payload.end_datetime.replace('+09:00', 'Z');
+      // KST 형식 유지
+      endDateTime = payload.end_datetime;
     } else {
-      const endDate = new Date(startDateTime);
-      endDate.setHours(endDate.getHours() + 1);
-      endDateTime = endDate.toISOString();
+      // startDateTime으로부터 1시간 후, KST 형식 유지
+      let endDate;
+      if (startDateTime.includes('+09:00')) {
+        // KST 형식인 경우
+        endDate = new Date(startDateTime.replace('+09:00', 'Z'));
+        endDate.setHours(endDate.getHours() + 1);
+        endDateTime = endDate.toISOString().replace('Z', '+09:00');
+      } else {
+        // 기본 UTC 형식인 경우 (하지만 이 경우는 거의 없을 것임)
+        endDate = new Date(startDateTime);
+        endDate.setHours(endDate.getHours() + 1);
+        endDateTime = endDate.toISOString();
+      }
     }
 
     const roomId = payload.room_id || payload.room || 'unknown';
