@@ -65,24 +65,10 @@ const parseMultipartFormData = (data) => {
 };
 
 // book_id에 대한 결제 금액을 대기하는 함수
-const waitForPaymentAmount = async (bookId, paymentAmounts, bookIdToIdxMap, pendingRevenueRequests, timeout = 30000) => {
+const waitForPaymentAmount = async (bookId, paymentAmounts, timeout = 30000) => {
   const start = Date.now();
-  let bookIdx = null;
-  for (const [bId, bIdx] of bookIdToIdxMap.entries()) {
-    if (bId === bookId) {
-      bookIdx = bIdx;
-      break;
-    }
-  }
-
   while (Date.now() - start < timeout) {
     if (paymentAmounts.has(bookId)) {
-      // /owner/revenue/ 요청이 처리 중인지 확인
-      if (bookIdx && pendingRevenueRequests.has(bookIdx)) {
-        console.log(`[DEBUG] Waiting for /owner/revenue/ request to complete for book_id ${bookId} (book_idx ${bookIdx})`);
-        await new Promise(resolve => setTimeout(resolve, 100));
-        continue;
-      }
       const amount = paymentAmounts.get(bookId);
       console.log(`[INFO] Found payment amount for book_id ${bookId}: ${amount}`);
       return amount;
@@ -95,24 +81,10 @@ const waitForPaymentAmount = async (bookId, paymentAmounts, bookIdToIdxMap, pend
 };
 
 // book_id에 대한 결제 상태를 대기하는 함수
-const waitForPaymentStatus = async (bookId, paymentStatus, bookIdToIdxMap, pendingRevenueRequests, timeout = 30000) => {
+const waitForPaymentStatus = async (bookId, paymentStatus, timeout = 30000) => {
   const start = Date.now();
-  let bookIdx = null;
-  for (const [bId, bIdx] of bookIdToIdxMap.entries()) {
-    if (bId === bookId) {
-      bookIdx = bIdx;
-      break;
-    }
-  }
-
   while (Date.now() - start < timeout) {
     if (paymentStatus.has(bookId)) {
-      // /owner/revenue/ 요청이 처리 중인지 확인
-      if (bookIdx && pendingRevenueRequests.has(bookIdx)) {
-        console.log(`[DEBUG] Waiting for /owner/revenue/ request to complete for book_id ${bookId} (book_idx ${bookIdx})`);
-        await new Promise(resolve => setTimeout(resolve, 100));
-        continue;
-      }
       const status = paymentStatus.get(bookId);
       console.log(`[INFO] Found payment status for book_id ${bookId}: ${status}`);
       return status;
@@ -124,35 +96,8 @@ const waitForPaymentStatus = async (bookId, paymentStatus, bookIdToIdxMap, pendi
   return false; // 타임아웃 시 기본값 false 반환
 };
 
-// /owner/revenue/ 요청이 완료될 때까지 대기하는 함수
-const waitForRevenueRequest = async (bookId, bookIdToIdxMap, pendingRevenueRequests, timeout = 30000) => {
-  const start = Date.now();
-  let bookIdx = null;
-  for (const [bId, bIdx] of bookIdToIdxMap.entries()) {
-    if (bId === bookId) {
-      bookIdx = bIdx;
-      break;
-    }
-  }
-
-  if (!bookIdx) {
-    console.log(`[WARN] No book_idx found for book_id ${bookId}, proceeding without waiting for /owner/revenue/ request`);
-    return;
-  }
-
-  while (Date.now() - start < timeout) {
-    if (!pendingRevenueRequests.has(bookIdx)) {
-      console.log(`[INFO] /owner/revenue/ request completed for book_id ${bookId} (book_idx ${bookIdx})`);
-      return;
-    }
-    console.log(`[DEBUG] Waiting for /owner/revenue/ request to complete for book_id ${bookId} (book_idx ${bookIdx})`);
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
-  console.log(`[WARN] Timeout waiting for /owner/revenue/ request for book_id ${bookId} (book_idx ${bookIdx})`);
-};
-
 // 24golf API로 데이터 전송
-const sendTo24GolfApi = async (type, url, payload, response = null, accessToken, processedBookings = new Set(), paymentAmounts = new Map(), paymentStatus = new Map(), bookIdToIdxMap = new Map(), pendingRevenueRequests = new Map()) => {
+const sendTo24GolfApi = async (type, url, payload, response = null, accessToken, processedBookings = new Set(), paymentAmounts = new Map(), paymentStatus = new Map()) => {
   if (type === 'Booking_Create' && response && response.book_id && processedBookings.has(response.book_id)) {
     console.log(`[INFO] Booking_Create already processed for book_id: ${response.book_id}, skipping...`);
     return;
@@ -168,7 +113,7 @@ const sendTo24GolfApi = async (type, url, payload, response = null, accessToken,
   // 결제 상태를 paymentStatus Map에서 가져오기
   let isPaymentCompleted = false;
   const bookId = response?.book_id || payload?.externalId || 'unknown';
-  isPaymentCompleted = await waitForPaymentStatus(bookId, paymentStatus, bookIdToIdxMap, pendingRevenueRequests);
+  isPaymentCompleted = await waitForPaymentStatus(bookId, paymentStatus);
   console.log(`isPaymentCompleted (from /owner/revenue/ finished): ${isPaymentCompleted}`);
 
   if (type === 'Booking_Create' && response) {
@@ -225,7 +170,7 @@ const sendTo24GolfApi = async (type, url, payload, response = null, accessToken,
     }
 
     // 결제 금액 설정
-    const paymentAmount = await waitForPaymentAmount(bookId, paymentAmounts, bookIdToIdxMap, pendingRevenueRequests);
+    const paymentAmount = paymentAmounts.has(bookId) ? paymentAmounts.get(bookId) : 0;
     console.log(`[DEBUG] Payment Amount for book_id ${bookId}: ${paymentAmount}`);
 
     apiData = {
@@ -288,7 +233,7 @@ const sendTo24GolfApi = async (type, url, payload, response = null, accessToken,
     const name = payload.name || 'Unknown';
     const phone = payload.phone || '010-0000-0000';
 
-    const paymentAmount = await waitForPaymentAmount(bookId, paymentAmounts, bookIdToIdxMap, pendingRevenueRequests);
+    const paymentAmount = paymentAmounts.has(bookId) ? paymentAmounts.get(bookId) : 0;
     console.log(`[DEBUG] Payment Amount for book_id ${bookId}: ${paymentAmount}`);
 
     apiData = {
@@ -448,7 +393,6 @@ function createWindow() {
     const paymentAmounts = new Map(); // 결제 금액 저장 Map (book_id -> amount)
     const paymentStatus = new Map(); // 결제 상태 저장 Map (book_id -> finished)
     const bookIdToIdxMap = new Map(); // book_id와 book_idx 매핑 Map
-    const pendingRevenueRequests = new Map(); // 처리 중인 /owner/revenue/ 요청의 book_idx 저장
 
     // 타임아웃 설정 (5분)
     const TIMEOUT_MS = 5 * 60 * 1000;
@@ -496,7 +440,6 @@ function createWindow() {
           const finished = payload.finished === 'true'; // postData에서 finished 값 추출
 
           if (bookIdx) {
-            pendingRevenueRequests.set(bookIdx, true); // 처리 중 플래그 설정
             let bookId = null;
             for (const [bId, bIdx] of bookIdToIdxMap.entries()) {
               if (bIdx === bookIdx) {
@@ -512,9 +455,8 @@ function createWindow() {
                 console.log(`[INFO] Updated payment amount for book_id ${bookId} (book_idx ${bookIdx}) from ${previousAmount} to ${amount} (from /owner/revenue/ postData)`);
               }
               if (finished !== undefined) {
-                const previousStatus = paymentStatus.has(bookId) ? paymentStatus.get(bookId) : null;
                 paymentStatus.set(bookId, finished);
-                console.log(`[INFO] Updated payment status for book_id ${bookId} (book_idx ${bookIdx}) from ${previousStatus} to ${finished} (from /owner/revenue/ postData)`);
+                console.log(`[INFO] Stored payment status for book_id ${bookId} (book_idx ${bookIdx}): ${finished} (from /owner/revenue/ postData)`);
               }
               console.log(`[DEBUG] Current paymentAmounts:`, Array.from(paymentAmounts.entries()));
               console.log(`[DEBUG] Current paymentStatus:`, Array.from(paymentStatus.entries()));
@@ -541,11 +483,8 @@ function createWindow() {
           payload.externalId = bookingId;
           console.log(`[DEBUG] Booking_Update Full Payload:`, JSON.stringify(payload, null, 2));
 
-          // /owner/revenue/ 요청이 완료될 때까지 대기
-          await waitForRevenueRequest(bookingId, bookIdToIdxMap, pendingRevenueRequests);
-
-          const paymentAmount = await waitForPaymentAmount(bookingId, paymentAmounts, bookIdToIdxMap, pendingRevenueRequests);
-          await sendTo24GolfApi('Booking_Update', url, payload, null, accessToken, processedBookings, paymentAmounts, paymentStatus, bookIdToIdxMap, pendingRevenueRequests);
+          const paymentAmount = await waitForPaymentAmount(bookingId, paymentAmounts);
+          await sendTo24GolfApi('Booking_Update', url, payload, null, accessToken, processedBookings, paymentAmounts, paymentStatus);
         } else if (url.includes('/booking/change_info') && method === 'PATCH' && payload.state === 'canceled') {
           const bookingId = url.split('/').pop().split('?')[0];
           payload.externalId = bookingId;
@@ -605,21 +544,18 @@ function createWindow() {
             if (bookId) {
               if (amount !== undefined) {
                 const previousAmount = paymentAmounts.has(bookId) ? paymentAmounts.get(bookId) : null;
-                paymentAmounts.set(bookId, amount);
+                paymentAmounts.set(bookId, amount); // 항상 최신 금액으로 덮어쓰기
                 console.log(`[INFO] Updated payment amount for book_id ${bookId} (book_idx ${bookIdx}) from ${previousAmount} to ${amount} (from /owner/revenue/ response)`);
               }
               if (finished !== undefined) {
-                const previousStatus = paymentStatus.has(bookId) ? paymentStatus.get(bookId) : null;
                 paymentStatus.set(bookId, finished);
-                console.log(`[INFO] Updated payment status for book_id ${bookId} (book_idx ${bookIdx}) from ${previousStatus} to ${finished} (from /owner/revenue/ response)`);
+                console.log(`[INFO] Stored payment status for book_id ${bookId} (book_idx ${bookIdx}): ${finished} (from /owner/revenue/ response)`);
               }
               console.log(`[DEBUG] Current paymentAmounts:`, Array.from(paymentAmounts.entries()));
               console.log(`[DEBUG] Current paymentStatus:`, Array.from(paymentStatus.entries()));
             } else {
               console.log(`[WARN] No book_id found for book_idx ${bookIdx}`);
             }
-            pendingRevenueRequests.delete(bookIdx); // 처리 완료 플래그 제거
-            console.log(`[DEBUG] Removed book_idx ${bookIdx} from pendingRevenueRequests`);
           } else {
             console.log(`[WARN] book_idx missing in /owner/revenue/ request payload:`, JSON.stringify(payload, null, 2));
           }
@@ -711,7 +647,7 @@ function createWindow() {
                       is_paid: latestBooking.is_paid,
                       room: latestBooking.room
                     };
-                    await sendTo24GolfApi('Booking_Create', url, payload, responseForBooking, accessToken, processedBookings, paymentAmounts, paymentStatus, bookIdToIdxMap, pendingRevenueRequests);
+                    await sendTo24GolfApi('Booking_Create', url, payload, responseForBooking, accessToken, processedBookings, paymentAmounts, paymentStatus);
                     pendingCustomerRequests.delete(customerId);
                     console.log(`[DEBUG] Removed customer ${customerId} from pendingCustomerRequests`);
                   } else {
@@ -750,8 +686,8 @@ function createWindow() {
 
           // 결제 금액과 상태를 대기한 후 sendTo24GolfApi 호출
           const bookId = responseData?.book_id || 'unknown';
-          const paymentAmount = await waitForPaymentAmount(bookId, paymentAmounts, bookIdToIdxMap, pendingRevenueRequests);
-          await sendTo24GolfApi('Booking_Create', url, requestData.payload, responseData, accessToken, processedBookings, paymentAmounts, paymentStatus, bookIdToIdxMap, pendingRevenueRequests);
+          const paymentAmount = await waitForPaymentAmount(bookId, paymentAmounts);
+          await sendTo24GolfApi('Booking_Create', url, requestData.payload, responseData, accessToken, processedBookings, paymentAmounts, paymentStatus);
           requestMap.delete(url);
         }
       }
