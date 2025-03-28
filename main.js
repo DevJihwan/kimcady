@@ -356,7 +356,7 @@ function createWindow() {
     const paymentAmounts = new Map();
     const paymentStatus = new Map();
     const bookIdToIdxMap = new Map();
-    const bookingDataMap = new Map(); // Booking_Create와 Booking_Update 데이터 임시 저장
+    const bookingDataMap = new Map();
 
     // 타임아웃 설정 (5분)
     const TIMEOUT_MS = 5 * 60 * 1000;
@@ -444,17 +444,63 @@ function createWindow() {
         } else if (url.includes('/owner/booking') && method === 'POST') {
           console.log(`[DEBUG] Booking_Create Request Captured - URL: ${url}`);
           requestMap.set(url, { method, payload, type: 'Booking_Create' });
-        } else if (url.includes('/booking/change_info') && method === 'PATCH' && (!payload.state || payload.state !== 'canceled')) {
-          const bookingId = url.split('/').pop().split('?')[0];
-          payload.externalId = bookingId;
-          console.log(`[DEBUG] Booking_Update Full Payload:`, JSON.stringify(payload, null, 2));
-          bookingDataMap.set(bookingId, {
-            type: 'Booking_Update',
-            payload: payload,
-            timestamp: new Date()
-          });
-          console.log(`[INFO] Stored Booking_Update data for book_id ${bookingId}`);
-        } else if (url.includes('/booking/change_info') && method === 'PATCH' && payload.state === 'canceled') {
+        }else if (url.includes('/booking/change_info') && method === 'PATCH' && (!payload.state || payload.state !== 'canceled')) {
+            const bookingId = url.split('/').pop().split('?')[0];
+            payload.externalId = bookingId;
+            console.log(`[DEBUG] Booking_Update Full Payload:`, JSON.stringify(payload, null, 2));
+      
+            // HTML에서 결제 정보 수집
+            let paymentAmountFromDom = 0;
+            let paymentStatusFromDom = false;
+            try {
+              // 이용 금액 수집
+              await page.waitForSelector('.sc-pktCe.dSKYub .sc-pAyMl.fkDqVf', { timeout: 5000 });
+              const paymentAmountText = await page.$eval('.sc-pktCe.dSKYub .sc-pAyMl.fkDqVf', el => el.textContent.trim());
+              paymentAmountFromDom = parseInt(paymentAmountText.replace(/[^0-9]/g, ''), 10);
+              console.log(`[INFO] Extracted payment amount from DOM: ${paymentAmountFromDom}`);
+      
+              // 결제 완료 체크박스 상태 수집
+              await page.waitForSelector('.MuiFormControlLabel-root', { timeout: 5000 }); // 체크박스 상위 요소 대기
+              // DOM 업데이트가 반영될 때까지 약간의 지연 추가
+              await new Promise(resolve => setTimeout(resolve, 500)); // 0.5초 대기
+              paymentStatusFromDom = await page.evaluate(() => {
+                const checkbox = document.querySelector('.PrivateSwitchBase-input.css-1m9pwf3');
+                return checkbox ? checkbox.checked : false;
+              });
+              console.log(`[INFO] Extracted payment status from DOM (via evaluate): ${paymentStatusFromDom}`);
+      
+              // 추가 디버깅: 체크박스 상태와 클래스 확인
+              const hasCheckedClass = await page.evaluate(() => {
+                return document.querySelector('.MuiCheckbox-root')?.classList.contains('Mui-checked');
+              });
+              console.log(`[DEBUG] Mui-checked class exists: ${hasCheckedClass}`);
+              if (hasCheckedClass !== paymentStatusFromDom) {
+                console.warn(`[WARN] Inconsistent payment status: checked=${paymentStatusFromDom}, Mui-checked=${hasCheckedClass}`);
+                paymentStatusFromDom = hasCheckedClass; // 클래스 기반으로 보정
+              }
+            } catch (e) {
+              console.error(`[ERROR] Failed to extract payment info from DOM: ${e.message}`);
+              paymentAmountFromDom = 0;
+              paymentStatusFromDom = false;
+            }
+      
+            // DOM에서 수집한 값으로 paymentAmounts와 paymentStatus 업데이트
+            paymentAmounts.set(bookingId, paymentAmountFromDom);
+            paymentStatus.set(bookingId, paymentStatusFromDom);
+      
+            // 즉시 Booking_Update 호출
+            await sendTo24GolfApi(
+              'Booking_Update',
+              url,
+              payload,
+              null,
+              accessToken,
+              processedBookings,
+              paymentAmounts,
+              paymentStatus
+            );
+            console.log(`[INFO] Processed Booking_Update for book_id ${bookingId} with DOM data`);
+          }else if (url.includes('/booking/change_info') && method === 'PATCH' && payload.state === 'canceled') {
           const bookingId = url.split('/').pop().split('?')[0];
           payload.externalId = bookingId;
           await sendTo24GolfApi('Booking_Cancel', url, payload, null, accessToken, processedBookings);
@@ -514,7 +560,6 @@ function createWindow() {
               console.log(`[DEBUG] Current paymentAmounts:`, Array.from(paymentAmounts.entries()));
               console.log(`[DEBUG] Current paymentStatus:`, Array.from(paymentStatus.entries()));
 
-              // bookingDataMap에서 해당 bookId 확인 및 처리
               if (bookingDataMap.has(bookId)) {
                 const { type, payload } = bookingDataMap.get(bookId);
                 console.log(`[DEBUG] Found pending ${type} data for book_id ${bookId} in bookingDataMap`);
@@ -531,22 +576,8 @@ function createWindow() {
                     paymentStatus
                   );
                   console.log(`[INFO] Processed Booking_Create for book_id ${bookId} after revenue update`);
-                } else if (type === 'Booking_Update') {
-                  await sendTo24GolfApi(
-                    'Booking_Update',
-                    url,
-                    payload,
-                    null,
-                    accessToken,
-                    processedBookings,
-                    paymentAmounts,
-                    paymentStatus
-                  );
-                  console.log(`[INFO] Processed Booking_Update for book_id ${bookId} after revenue update`);
+                  bookingDataMap.delete(bookId);
                 }
-                bookingDataMap.delete(bookId);
-              } else {
-                console.log(`[DEBUG] No pending data found for book_id ${bookId} in bookingDataMap`);
               }
             } else {
               console.log(`[WARN] No book_id found for book_idx ${bookIdx}`);
