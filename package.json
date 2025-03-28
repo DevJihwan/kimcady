@@ -23,7 +23,8 @@
             "ia32"
           ]
         }
-      ]
+      ],
+      "icon": "build/icon.ico"
     },
     "nsis": {
       "oneClick": false,
@@ -35,7 +36,15 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "uninstallDisplayName": "KimCaddie",
-      "shortcutName": "KimCaddie"
+      "shortcutName": "KimCaddie",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico",
+      "artifactName": "KimCaddie-Setup-${version}.${ext}"
+    },
+    "directories": {
+      "buildResources": "build",
+      "output": "dist"
     }
   },
   "dependencies": {
