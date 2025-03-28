@@ -55,7 +55,7 @@ const parseMultipartFormData = (data) => {
   const parts = data.split(boundary).slice(1, -1);
 
   parts.forEach(part => {
-    const match = part.match(/name=\"([^\"]+)\"\\r\\n\\r\\n(.+?)(?=\\r\\n|$)/);
+    const match = part.match(/name="([^"]+)"\r\n\r\n(.+?)(?=\r\n|$)/);
     if (match) {
       const [, key, value] = match;
       result[key] = value;
@@ -84,14 +84,11 @@ const sendTo24GolfApi = async (type, url, payload, response = null, accessToken,
     apiUrl = `https://api.dev.24golf.co.kr/stores/${STORE_ID}/reservation/crawl`;
 
     // response에서 필요한 데이터 추출
-    // 1. room 값 확인 (response.room 우선 사용, 없으면 payload에서 가져옴)
     const roomId = response.room || (payload && payload.room) || null;
     
-    // 2. 시작 및 종료 시간 확인 (response.start_datetime/end_datetime 우선 사용)
     let startDateTime = null;
     let endDateTime = null;
 
-    // response에서 시간 데이터 추출
     if (response.start_datetime) {
       startDateTime = response.start_datetime;
     } else if (payload && payload.start_datetime) {
@@ -104,7 +101,6 @@ const sendTo24GolfApi = async (type, url, payload, response = null, accessToken,
       endDateTime = payload.end_datetime;
     }
 
-    // 시간 데이터가 있으면 포맷 변환 (Z로 끝나도록)
     if (startDateTime) {
       startDateTime = startDateTime.endsWith('Z') ? startDateTime : startDateTime.replace('+09:00', 'Z');
     } else {
@@ -114,7 +110,6 @@ const sendTo24GolfApi = async (type, url, payload, response = null, accessToken,
     if (endDateTime) {
       endDateTime = endDateTime.endsWith('Z') ? endDateTime : endDateTime.replace('+09:00', 'Z');
     } else {
-      // 종료 시간이 없는 경우, 시작 시간이 있으면 시작 시간 + 1시간, 아니면 현재 시간
       if (startDateTime && startDateTime !== new Date().toISOString()) {
         const endDate = new Date(startDateTime);
         endDate.setHours(endDate.getHours() + 1);
@@ -124,7 +119,6 @@ const sendTo24GolfApi = async (type, url, payload, response = null, accessToken,
       }
     }
 
-    // 데이터 준비
     apiData = {
       externalId: response.book_id || 'unknown',
       name: response.name || 'Unknown',
@@ -165,18 +159,31 @@ const sendTo24GolfApi = async (type, url, payload, response = null, accessToken,
       endDateTime = endDate.toISOString();
     }
 
+    // payload에서 room_id, name, phone 추출
+    const roomId = payload.room_id || payload.room || 'unknown';
+    const name = payload.name || 'Unknown';
+    const phone = payload.phone || '010-0000-0000';
+
     apiData = {
       externalId: payload.externalId || 'unknown',
-      name: 'Unknown',
-      phone: '010-0000-0000',
+      name: name,
+      phone: phone,
       partySize: parseInt(payload.person, 10) || 1,
       startDate: startDateTime,
       endDate: endDateTime,
-      roomId: payload.room_id || payload.room || 'unknown',
+      roomId: roomId,
       paymented: false,
       paymentAmount: 0,
       crawlingSite: 'KimCaddie'
     };
+
+    console.log(`[DEBUG] Extracted data for Booking_Update:
+    - roomId: ${roomId} (from: ${payload.room_id ? 'payload.room_id' : payload.room ? 'payload.room' : 'not found'})
+    - name: ${name} (from: ${payload.name ? 'payload.name' : 'default'})
+    - phone: ${phone} (from: ${payload.phone ? 'payload.phone' : 'default'})
+    - startDate: ${startDateTime} (from: ${payload.start_datetime ? 'payload.start_datetime' : 'current time'})
+    - endDate: ${endDateTime} (from: ${payload.end_datetime ? 'payload.end_datetime' : 'calculated'})
+    `);
   } else if (type === 'Booking_Cancel') {
     apiMethod = 'DELETE';
     apiUrl = `https://api.dev.24golf.co.kr/stores/${STORE_ID}/reservation/crawl`;
@@ -382,6 +389,7 @@ function createWindow() {
         else if (url.includes('/booking/change_info') && method === 'PATCH' && (!payload.state || payload.state !== 'canceled')) {
           const bookingId = url.split('/').pop().split('?')[0];
           payload.externalId = bookingId;
+          console.log(`[DEBUG] Booking_Update Payload:`, JSON.stringify(payload, null, 2));
           await sendTo24GolfApi('Booking_Update', url, payload, null, accessToken, processedBookings);
         }
         // 예약 취소 요청 감지
@@ -573,5 +581,5 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
-    app.quit();
+  app.quit();
 });
