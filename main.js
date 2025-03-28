@@ -22,7 +22,7 @@ if (process.platform === 'win32') {
 
 // access_token 발급 함수
 const getAccessToken = async () => {
-  const url = `https://api.dev.24golf.co.kr/auth/token/store/${STORE_ID}/role/singleCrawler`;
+  const url = `https://api.dev.24golf.co.kr/auth/token/stores/${STORE_ID}/role/singleCrawler`;
   console.log(`[Token] Attempting to fetch access token from: ${url}`);
 
   try {
@@ -59,7 +59,13 @@ const parseMultipartFormData = (data) => {
 };
 
 // 24golf API로 데이터 전송
-const sendTo24GolfApi = async (type, url, payload, response = null, accessToken) => {
+const sendTo24GolfApi = async (type, url, payload, response = null, accessToken, processedBookings = new Set()) => {
+  // 중복 호출 방지
+  if (type === 'Booking_Create' && response && response.book_id && processedBookings.has(response.book_id)) {
+    console.log(`[INFO] Booking_Create already processed for book_id: ${response.book_id}, skipping...`);
+    return;
+  }
+
   const timestamp = new Date().toISOString();
   const logMessage = `[${timestamp}] ${type} - URL: ${url} - Payload: ${JSON.stringify(payload)} - Response: ${response ? JSON.stringify(response) : 'N/A'}\n`;
   console.log(logMessage);
@@ -134,6 +140,10 @@ const sendTo24GolfApi = async (type, url, payload, response = null, accessToken)
       });
     }
     console.log(`[API] Successfully sent ${type}: ${apiResponse.status}`);
+    // 처리된 book_id 기록
+    if (type === 'Booking_Create' && response && response.book_id) {
+      processedBookings.add(response.book_id);
+    }
   } catch (error) {
     console.error(`[API Error] Failed to send ${type}: ${error.message}`);
     if (error.response) {
@@ -196,6 +206,9 @@ function createWindow() {
 
     const requestMap = new Map();
     const bookingIds = new Map();
+    const processedBookings = new Set(); // 중복 호출 방지용
+    let immediateBookable = false; // 즉시 확정 여부
+    const pendingCustomerRequests = new Map(); // 고객 요청 대기 목록
 
     // API 요청 감지
     page.on('request', async (request) => {
@@ -208,7 +221,7 @@ function createWindow() {
         console.log(`[DEBUG] POST Request Detected - URL: ${url}, Data: ${postData}`);
       }
 
-      if (url.startsWith('https://api.kimcaddie.com/api/') && (method === 'POST' || method === 'PATCH')) {
+      if (url.startsWith('https://api.kimcaddie.com/api/')) {
         let payload = {};
         const contentType = headers['content-type'] || '';
         if (contentType.includes('multipart/form-data') && postData) {
@@ -223,8 +236,23 @@ function createWindow() {
           payload = postData || {};
         }
 
+        // 매장 정보 요청 감지
+        if (url.includes('/owner/shop/-/') && method === 'GET') {
+          console.log(`[DEBUG] Shop Info Request Captured - URL: ${url}`);
+          requestMap.set(url, { method, payload, type: 'Shop_Info' });
+        }
+        // 고객 요청 감지
+        else if (url.includes('/owner/customer/') && method === 'GET') {
+          console.log(`[DEBUG] Customer Request Captured - URL: ${url}`);
+          requestMap.set(url, { method, payload, type: 'Customer_Request' });
+        }
+        // 예약 목록 요청 감지
+        else if (url.includes('/owner/booking/') && method === 'GET') {
+          console.log(`[DEBUG] Booking List Request Captured - URL: ${url}`);
+          requestMap.set(url, { method, payload, type: 'Booking_List' });
+        }
         // 직접 예약 등록 요청 감지
-        if (url.includes('/owner/booking') && method === 'POST') {
+        else if (url.includes('/owner/booking') && method === 'POST') {
           console.log(`[DEBUG] Booking_Create Request Captured - URL: ${url}`);
           requestMap.set(url, { method, payload, type: 'Booking_Create' });
         }
@@ -232,13 +260,13 @@ function createWindow() {
         else if (url.includes('/booking/change_info') && method === 'PATCH' && (!payload.state || payload.state !== 'canceled')) {
           const bookingId = url.split('/').pop().split('?')[0];
           payload.externalId = bookingId;
-          await sendTo24GolfApi('Booking_Update', url, payload, null, accessToken);
+          await sendTo24GolfApi('Booking_Update', url, payload, null, accessToken, processedBookings);
         }
         // 예약 취소 요청 감지
         else if (url.includes('/booking/change_info') && method === 'PATCH' && payload.state === 'canceled') {
           const bookingId = url.split('/').pop().split('?')[0];
           payload.externalId = bookingId;
-          await sendTo24GolfApi('Booking_Cancel', url, payload, null, accessToken);
+          await sendTo24GolfApi('Booking_Cancel', url, payload, null, accessToken, processedBookings);
         }
         // 사장님 수락 요청 감지
         else if (url.includes('/booking/confirm_state') && method === 'PATCH') {
@@ -259,6 +287,85 @@ function createWindow() {
         console.log(`[DEBUG] POST Response Detected - URL: ${url}, Status: ${status}`);
       }
 
+      // 매장 정보 응답 처리
+      if (url.includes('/owner/shop/-/') && status === 200 && method === 'GET') {
+        const requestData = requestMap.get(url);
+        if (requestData && requestData.type === 'Shop_Info') {
+          try {
+            const responseData = await response.json();
+            console.log(`[DEBUG] Shop Info Response Data:`, JSON.stringify(responseData, null, 2));
+            immediateBookable = responseData.immediate_bookable || false;
+            console.log(`[INFO] Immediate Bookable: ${immediateBookable}`);
+          } catch (e) {
+            console.log(`[DEBUG] Response Parse Failed - URL: ${url}, Error: ${e.message}`);
+          }
+          requestMap.delete(url);
+        }
+      }
+
+      // 고객 요청 응답 처리
+      if (url.includes('/owner/customer/') && status === 200 && method === 'GET') {
+        const requestData = requestMap.get(url);
+        if (requestData && requestData.type === 'Customer_Request') {
+          try {
+            const responseData = await response.json();
+            console.log(`[DEBUG] Customer Request Response Data:`, JSON.stringify(responseData, null, 2));
+            if (immediateBookable) {
+              const customerId = responseData.id;
+              const requestTime = new Date(); // 요청 시간 기록
+              pendingCustomerRequests.set(customerId, { requestTime });
+              console.log(`[INFO] Immediate booking detected for customer ${customerId}. Waiting for booking details...`);
+            }
+          } catch (e) {
+            console.log(`[DEBUG] Response Parse Failed - URL: ${url}, Error: ${e.message}`);
+          }
+          requestMap.delete(url);
+        }
+      }
+
+      // 예약 목록 응답 처리
+      if (url.includes('/owner/booking/') && status === 200 && method === 'GET') {
+        const requestData = requestMap.get(url);
+        if (requestData && requestData.type === 'Booking_List') {
+          try {
+            const responseData = await response.json();
+            console.log(`[DEBUG] Booking List Response Data:`, JSON.stringify(responseData, null, 2));
+
+            // 예약 목록 순회
+            if (responseData.results && Array.isArray(responseData.results)) {
+              for (const booking of responseData.results) {
+                const customerId = booking.customer;
+                if (pendingCustomerRequests.has(customerId)) {
+                  const { requestTime } = pendingCustomerRequests.get(customerId);
+                  const bookingTime = new Date(booking.reg_date);
+                  // 고객 요청 이후 생성된 예약인지 확인
+                  if (bookingTime >= requestTime && (booking.immediate_booked || booking.state === 'success')) {
+                    console.log(`[INFO] Found booking for customer ${customerId}: book_id ${booking.book_id}`);
+                    const payload = {
+                      start_datetime: booking.start_datetime,
+                      end_datetime: booking.end_datetime,
+                      person: booking.person,
+                      room: booking.room
+                    };
+                    const responseForBooking = {
+                      book_id: booking.book_id,
+                      name: booking.name,
+                      phone: booking.phone,
+                      is_paid: booking.is_paid
+                    };
+                    await sendTo24GolfApi('Booking_Create', url, payload, responseForBooking, accessToken, processedBookings);
+                    pendingCustomerRequests.delete(customerId); // 처리 완료 후 제거
+                  }
+                }
+              }
+            }
+          } catch (e) {
+            console.log(`[DEBUG] Response Parse Failed - URL: ${url}, Error: ${e.message}`);
+          }
+          requestMap.delete(url);
+        }
+      }
+
       // 직접 예약 등록 응답 처리
       if (url.includes('/owner/booking') && status === 200 && method === 'POST') {
         const requestData = requestMap.get(url);
@@ -275,7 +382,7 @@ function createWindow() {
             responseData = null;
           }
 
-          await sendTo24GolfApi('Booking_Create', url, requestData.payload, responseData, accessToken);
+          await sendTo24GolfApi('Booking_Create', url, requestData.payload, responseData, accessToken, processedBookings);
           requestMap.delete(url);
         }
       }
@@ -289,10 +396,8 @@ function createWindow() {
             responseData = await response.json();
             console.log(`[DEBUG] Booking_Confirm Response Data:`, JSON.stringify(responseData, null, 2));
 
-            // bookingInfo에서 필요한 데이터 추출
             const bookingInfo = responseData.bookingInfo;
             if (bookingInfo && bookingInfo.state === 'confirmed') {
-              // Booking_Create API 호출
               const payload = {
                 start_datetime: bookingInfo.start_datetime,
                 end_datetime: bookingInfo.end_datetime,
@@ -305,7 +410,7 @@ function createWindow() {
                 phone: bookingInfo.phone,
                 is_paid: bookingInfo.is_paid
               };
-              await sendTo24GolfApi('Booking_Create', url, payload, responseForBooking, accessToken);
+              await sendTo24GolfApi('Booking_Create', url, payload, responseForBooking, accessToken, processedBookings);
             }
           } catch (e) {
             console.log(`[DEBUG] Response Parse Failed - URL: ${url}, Error: ${e.message}`);
