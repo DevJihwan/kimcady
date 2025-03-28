@@ -8,6 +8,12 @@ require('dotenv').config();
 // 환경 변수
 const STORE_ID = '6690d7ea750ff9a6689e9af3';
 
+// 윈도우에서 실행 파일 확인
+if (process.platform === 'win32') {
+  console.log(`Running on Windows. App path: ${app.getPath('exe')}`);
+  console.log(`Desktop path: ${app.getPath('desktop')}`);
+}
+
 let CHROME_PATH;
 if (process.platform === 'win32') {
   CHROME_PATH = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
@@ -49,7 +55,7 @@ const parseMultipartFormData = (data) => {
   const parts = data.split(boundary).slice(1, -1);
 
   parts.forEach(part => {
-    const match = part.match(/name="([^"]+)"\r\n\r\n(.+?)(?=\r\n|$)/);
+    const match = part.match(/name=\"([^\"]+)\"\\r\\n\\r\\n(.+?)(?=\\r\\n|$)/);
     if (match) {
       const [, key, value] = match;
       result[key] = value;
