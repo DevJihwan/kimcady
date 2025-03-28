@@ -448,7 +448,6 @@ function createWindow() {
           const bookingId = url.split('/').pop().split('?')[0];
           payload.externalId = bookingId;
           console.log(`[DEBUG] Booking_Update Full Payload:`, JSON.stringify(payload, null, 2));
-          // Booking_Update 데이터를 bookingDataMap에 저장
           bookingDataMap.set(bookingId, {
             type: 'Booking_Update',
             payload: payload,
@@ -492,7 +491,7 @@ function createWindow() {
 
           const bookIdx = payload.book_idx;
           const amount = payload.amount ? parseInt(payload.amount, 10) : undefined;
-          const finished = responseData.finished || payload.finished === 'true';
+          const finished = responseData.finished !== undefined ? responseData.finished : payload.finished === 'true';
 
           if (bookIdx) {
             let bookId = null;
@@ -515,9 +514,10 @@ function createWindow() {
               console.log(`[DEBUG] Current paymentAmounts:`, Array.from(paymentAmounts.entries()));
               console.log(`[DEBUG] Current paymentStatus:`, Array.from(paymentStatus.entries()));
 
-              // Booking_Create 또는 Booking_Update 데이터가 있으면 처리
+              // bookingDataMap에서 해당 bookId 확인 및 처리
               if (bookingDataMap.has(bookId)) {
                 const { type, payload } = bookingDataMap.get(bookId);
+                console.log(`[DEBUG] Found pending ${type} data for book_id ${bookId} in bookingDataMap`);
                 if (type === 'Booking_Create') {
                   const { response: bookingResponse } = bookingDataMap.get(bookId);
                   await sendTo24GolfApi(
@@ -545,10 +545,14 @@ function createWindow() {
                   console.log(`[INFO] Processed Booking_Update for book_id ${bookId} after revenue update`);
                 }
                 bookingDataMap.delete(bookId);
+              } else {
+                console.log(`[DEBUG] No pending data found for book_id ${bookId} in bookingDataMap`);
               }
             } else {
               console.log(`[WARN] No book_id found for book_idx ${bookIdx}`);
             }
+          } else {
+            console.log(`[WARN] book_idx missing in /owner/revenue/ payload:`, JSON.stringify(payload, null, 2));
           }
         } catch (e) {
           console.log(`[DEBUG] Response Parse Failed - URL: ${url}, Error: ${e.message}`);
