@@ -48,27 +48,45 @@ const getAccessToken = async () => {
   }
 };
 
-// multipart/form-data를 파싱하는 함수
 const parseMultipartFormData = (data) => {
-  const result = {};
-  const boundary = data.match(/------WebKitFormBoundary[a-zA-Z0-9]+/)[0];
-  const parts = data.split(boundary).slice(1, -1);
+    const result = {};
+    const boundary = data.match(/------WebKitFormBoundary[a-zA-Z0-9]+/)[0];
+    const parts = data.split(boundary).slice(1, -1);
+  
+    parts.forEach(part => {
+      const match = part.match(/name=\"([^\"]+)\"[\r\n]+([\s\S]+?)(?=\r\n|$)/);
+      if (match) {
+        const [, key, value] = match;
+        result[key] = value.trim();
+      }
+    });
+    console.log('[DEBUG] Parsed multipart/form-data:', JSON.stringify(result, null, 2));
+    return result;
+  };
 
-  parts.forEach(part => {
-    const match = part.match(/name=\"([^\"]+)\"\\r\\n\\r\\n(.+?)(?=\\r\\n|$)/);
-    if (match) {
-      const [, key, value] = match;
-      result[key] = value;
+// "결제완료" 버튼 상태 확인 함수
+const checkPaymentCompletedStatus = async (page) => {
+    try {
+      const isChecked = await page.evaluate(() => {
+        const checkbox = document.querySelector('label.MuiFormControlLabel-root span.MuiCheckbox-root');
+        if (checkbox) {
+          return checkbox.classList.contains('Mui-checked');
+        }
+        return false;
+      });
+      console.log(`[DEBUG] Payment Completed Checkbox Status: ${isChecked}`);
+      return isChecked;
+    } catch (error) {
+      console.error(`[ERROR] Failed to check payment completed status: ${error.message}`);
+      return false; // 오류 발생 시 기본값으로 false 반환
     }
-  });
-  return result;
-};
+  };
 
 // 예약 정보 저장용 Map
 const bookingRoomMap = new Map();
 
 // 24golf API로 데이터 전송
-const sendTo24GolfApi = async (type, url, payload, response = null, accessToken, processedBookings = new Set()) => {
+const sendTo24GolfApi = async (type, url, payload, response = null, accessToken, processedBookings = new Set(), page = null) => {
   if (type === 'Booking_Create' && response && response.book_id && processedBookings.has(response.book_id)) {
     console.log(`[INFO] Booking_Create already processed for book_id: ${response.book_id}, skipping...`);
     return;
@@ -80,6 +98,13 @@ const sendTo24GolfApi = async (type, url, payload, response = null, accessToken,
 
   let apiMethod, apiUrl, apiData;
   const headers = { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' };
+
+  // "결제완료" 상태 확인 (page가 제공된 경우에만)
+  let isPaymentCompleted = false;
+  if (page) {
+    isPaymentCompleted = await checkPaymentCompletedStatus(page);
+    console.log(`isPaymentCompleted : ${isPaymentCompleted}`);
+  }
 
   if (type === 'Booking_Create' && response) {
     apiMethod = 'POST';
@@ -141,7 +166,7 @@ const sendTo24GolfApi = async (type, url, payload, response = null, accessToken,
       startDate: startDateTime,
       endDate: endDateTime,
       roomId: roomId ? roomId.toString() : 'unknown',
-      paymented: response.is_paid || false,
+      paymented: isPaymentCompleted, // "결제완료" 상태 반영
       paymentAmount: 0,
       crawlingSite: 'KimCaddie'
     };
@@ -161,8 +186,9 @@ const sendTo24GolfApi = async (type, url, payload, response = null, accessToken,
     apiMethod = 'PATCH';
     apiUrl = `https://api.dev.24golf.co.kr/stores/${STORE_ID}/reservation/crawl`;
     
-    let startDateTime = null;
-    let endDateTime = null;
+    let startDateTime = payload.start_datetime || null;
+    let endDateTime = payload.end_datetime || null;
+    const roomId = payload.room_id || payload.room || 'unknown'; // room_id 명시적 추출
 
     if (payload.start_datetime) {
       // KST 형식 유지
@@ -192,6 +218,7 @@ const sendTo24GolfApi = async (type, url, payload, response = null, accessToken,
       }
     }
 
+<<<<<<< HEAD
     const externalId = payload.externalId || 'unknown';
     
     // roomId 검색 순서: 
@@ -208,6 +235,8 @@ const sendTo24GolfApi = async (type, url, payload, response = null, accessToken,
       console.log(`[DEBUG] Using stored room information for booking ${externalId}: roomId = ${roomId}`);
     }
 
+=======
+>>>>>>> 7f804c1 (modified_is_paid)
     const name = payload.name || 'Unknown';
     const phone = payload.phone || '010-0000-0000';
 
@@ -400,6 +429,7 @@ function createWindow() {
           try {
             payload = JSON.parse(postData);
           } catch (e) {
+            console.error(`[ERROR] Failed to parse JSON payload: ${e.message}`);
             payload = postData;
           }
         } else {
@@ -417,14 +447,14 @@ function createWindow() {
           console.log(`[DEBUG] Booking_Create Request Captured - URL: ${url}`);
           requestMap.set(url, { method, payload, type: 'Booking_Create' });
         } else if (url.includes('/booking/change_info') && method === 'PATCH' && (!payload.state || payload.state !== 'canceled')) {
-          const bookingId = url.split('/').pop().split('?')[0];
-          payload.externalId = bookingId;
-          console.log(`[DEBUG] Booking_Update Payload:`, JSON.stringify(payload, null, 2));
-          await sendTo24GolfApi('Booking_Update', url, payload, null, accessToken, processedBookings);
+            const bookingId = url.split('/').pop().split('?')[0];
+            payload.externalId = bookingId;
+            console.log(`[DEBUG] Booking_Update Full Payload:`, JSON.stringify(payload, null, 2));
+            await sendTo24GolfApi('Booking_Update', url, payload, null, accessToken, processedBookings, page);
         } else if (url.includes('/booking/change_info') && method === 'PATCH' && payload.state === 'canceled') {
           const bookingId = url.split('/').pop().split('?')[0];
           payload.externalId = bookingId;
-          await sendTo24GolfApi('Booking_Cancel', url, payload, null, accessToken, processedBookings);
+          await sendTo24GolfApi('Booking_Cancel', url, payload, null, accessToken, processedBookings, page);
         } else if (url.includes('/booking/confirm_state') && method === 'PATCH') {
           console.log(`[DEBUG] Booking_Confirm Request Captured - URL: ${url}`);
           requestMap.set(url, { method, payload, type: 'Booking_Confirm' });
@@ -493,7 +523,7 @@ function createWindow() {
         if (requestData && requestData.type === 'Booking_List') {
           try {
             const responseData = await response.json();
-            console.log(`[DEBUG] Booking List Response Data:`, JSON.stringify(responseData, null, 2));
+            //console.log(`[DEBUG] Booking List Response Data:`, JSON.stringify(responseData, null, 2));
 
             // 모든 예약 정보에서 room 정보를 추출하여 저장
             if (responseData.results && Array.isArray(responseData.results)) {
@@ -581,7 +611,7 @@ function createWindow() {
             responseData = null;
           }
 
-          await sendTo24GolfApi('Booking_Create', url, requestData.payload, responseData, accessToken, processedBookings);
+          await sendTo24GolfApi('Booking_Create', url, requestData.payload, responseData, accessToken, processedBookings, page);
           requestMap.delete(url);
         }
       }
