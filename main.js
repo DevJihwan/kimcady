@@ -64,56 +64,105 @@ const parseMultipartFormData = (data) => {
   return result;
 };
 
-// 24golf API로 데이터 전송
 const sendTo24GolfApi = async (
-  type,
-  url,
-  payload,
-  response = null,
-  accessToken,
-  processedBookings = new Set(),
-  paymentAmounts = new Map(),
-  paymentStatus = new Map()
-) => {
-  if (type === 'Booking_Create' && response && response.book_id && processedBookings.has(response.book_id)) {
-    console.log(`[INFO] Booking_Create already processed for book_id: ${response.book_id}, skipping...`);
-    return;
-  }
-
-  const timestamp = new Date().toISOString();
-  const logMessage = `[${timestamp}] ${type} - URL: ${url} - Payload: ${JSON.stringify(payload)} - Response: ${response ? JSON.stringify(response) : 'N/A'}\n`;
-  console.log(logMessage);
-
-  let apiMethod, apiUrl, apiData;
-  const headers = { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' };
-
-  const bookId = response?.book_id || payload?.externalId || 'unknown';
-  const paymentAmount = paymentAmounts.has(bookId) ? paymentAmounts.get(bookId) : 0;
-  const isPaymentCompleted = paymentStatus.has(bookId) ? paymentStatus.get(bookId) : false;
-
-  if (type === 'Booking_Create' && response) {
-    apiMethod = 'POST';
-    apiUrl = `https://api.dev.24golf.co.kr/stores/${STORE_ID}/reservation/crawl`;
-
-    const roomId = response.room || (payload && payload.room) || null;
-    let startDateTime = response.start_datetime || (payload && payload.start_datetime) || null;
-    let endDateTime = response.end_datetime || (payload && payload.end_datetime) || null;
-
-    if (startDateTime) {
-      if (!startDateTime.includes('Z') && !startDateTime.includes('+')) {
-        startDateTime = `${startDateTime}+09:00`;
-      }
-    } else {
-      const now = new Date();
-      startDateTime = new Date(now.getTime() + (9 * 60 * 60 * 1000)).toISOString().replace('Z', '+09:00');
+    type,
+    url,
+    payload,
+    response = null,
+    accessToken,
+    processedBookings = new Set(),
+    paymentAmounts = new Map(),
+    paymentStatus = new Map()
+  ) => {
+    if (type === 'Booking_Create' && response && response.book_id && processedBookings.has(response.book_id)) {
+      console.log(`[INFO] Booking_Create already processed for book_id: ${response.book_id}, skipping...`);
+      return;
     }
-
-    if (endDateTime) {
-      if (!endDateTime.includes('Z') && !endDateTime.includes('+')) {
-        endDateTime = `${endDateTime}+09:00`;
+  
+    const timestamp = new Date().toISOString();
+    const logMessage = `[${timestamp}] ${type} - URL: ${url} - Payload: ${JSON.stringify(payload)} - Response: ${response ? JSON.stringify(response) : 'N/A'}\n`;
+    console.log(logMessage);
+  
+    let apiMethod, apiUrl, apiData;
+    const headers = { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' };
+  
+    const bookId = response?.book_id || payload?.externalId || 'unknown';
+    const paymentAmount = paymentAmounts.has(bookId) ? paymentAmounts.get(bookId) : 0;
+    const isPaymentCompleted = paymentStatus.has(bookId) ? paymentStatus.get(bookId) : false;
+  
+    console.log(`[DEBUG] Before API data construction - bookId: ${bookId}, paymentAmount: ${paymentAmount}, isPaymentCompleted: ${isPaymentCompleted}`);
+  
+    if (type === 'Booking_Create' && response) {
+      apiMethod = 'POST';
+      apiUrl = `https://api.dev.24golf.co.kr/stores/${STORE_ID}/reservation/crawl`;
+  
+      const roomId = response.room || (payload && payload.room) || null;
+      let startDateTime = response.start_datetime || (payload && payload.start_datetime) || null;
+      let endDateTime = response.end_datetime || (payload && payload.end_datetime) || null;
+  
+      if (startDateTime) {
+        if (!startDateTime.includes('Z') && !startDateTime.includes('+')) {
+          startDateTime = `${startDateTime}+09:00`;
+        }
+      } else {
+        const now = new Date();
+        startDateTime = new Date(now.getTime() + (9 * 60 * 60 * 1000)).toISOString().replace('Z', '+09:00');
       }
-    } else {
-      if (startDateTime && startDateTime !== new Date().toISOString()) {
+  
+      if (endDateTime) {
+        if (!endDateTime.includes('Z') && !endDateTime.includes('+')) {
+          endDateTime = `${endDateTime}+09:00`;
+        }
+      } else {
+        if (startDateTime && startDateTime !== new Date().toISOString()) {
+          let endDate;
+          if (startDateTime.includes('+09:00')) {
+            endDate = new Date(startDateTime.replace('+09:00', 'Z'));
+            endDate.setHours(endDate.getHours() + 1);
+            endDateTime = endDate.toISOString().replace('Z', '+09:00');
+          } else {
+            endDate = new Date(startDateTime);
+            endDate.setHours(endDate.getHours() + 1);
+            endDateTime = endDate.toISOString().replace('Z', '+09:00');
+          }
+        } else {
+          const now = new Date();
+          endDateTime = new Date(now.getTime() + (10 * 60 * 60 * 1000)).toISOString().replace('Z', '+09:00');
+        }
+      }
+  
+      apiData = {
+        externalId: bookId,
+        name: response.name || 'Unknown',
+        phone: response.phone || '010-0000-0000',
+        partySize: parseInt(response.person || payload.person || 1, 10),
+        startDate: startDateTime,
+        endDate: endDateTime,
+        roomId: roomId ? roomId.toString() : 'unknown',
+        paymented: isPaymentCompleted,
+        paymentAmount: paymentAmount,
+        crawlingSite: 'KimCaddie'
+      };
+  
+      console.log(`[DEBUG] Booking_Create API data:`, JSON.stringify(apiData, null, 2));
+    } else if (type === 'Booking_Update') {
+      apiMethod = 'PATCH';
+      apiUrl = `https://api.dev.24golf.co.kr/stores/${STORE_ID}/reservation/crawl`;
+  
+      let startDateTime = payload.start_datetime || null;
+      let endDateTime = payload.end_datetime || null;
+      const roomId = payload.room_id || payload.room || 'unknown';
+  
+      if (payload.start_datetime) {
+        startDateTime = payload.start_datetime;
+      } else {
+        const now = new Date();
+        startDateTime = new Date(now.getTime() + (9 * 60 * 60 * 1000)).toISOString().replace('Z', '+09:00');
+      }
+  
+      if (payload.end_datetime) {
+        endDateTime = payload.end_datetime;
+      } else {
         let endDate;
         if (startDateTime.includes('+09:00')) {
           endDate = new Date(startDateTime.replace('+09:00', 'Z'));
@@ -124,140 +173,89 @@ const sendTo24GolfApi = async (
           endDate.setHours(endDate.getHours() + 1);
           endDateTime = endDate.toISOString().replace('Z', '+09:00');
         }
-      } else {
-        const now = new Date();
-        endDateTime = new Date(now.getTime() + (10 * 60 * 60 * 1000)).toISOString().replace('Z', '+09:00');
+      }
+  
+      if (startDateTime && !startDateTime.includes('Z') && !startDateTime.includes('+')) {
+        startDateTime = `${startDateTime}+09:00`;
+      }
+  
+      if (endDateTime && !endDateTime.includes('Z') && !endDateTime.includes('+')) {
+        endDateTime = `${endDateTime}+09:00`;
+      }
+  
+      const name = payload.name || 'Unknown';
+      const phone = payload.phone || '010-0000-0000';
+  
+      apiData = {
+        externalId: bookId,
+        name: name,
+        phone: phone,
+        partySize: parseInt(payload.person, 10) || 1,
+        startDate: startDateTime,
+        endDate: endDateTime,
+        roomId: roomId,
+        paymented: isPaymentCompleted, // 명시적으로 반영
+        paymentAmount: paymentAmount,
+        crawlingSite: 'KimCaddie'
+      };
+  
+      console.log(`[DEBUG] Booking_Update API data:`, JSON.stringify(apiData, null, 2));
+    } else if (type === 'Booking_Cancel') {
+      apiMethod = 'DELETE';
+      apiUrl = `https://api.dev.24golf.co.kr/stores/${STORE_ID}/reservation/crawl`;
+      apiData = {
+        externalId: payload.externalId || 'unknown',
+        crawlingSite: 'KimCaddie',
+        reason: payload.canceled_by || 'Canceled by Manager'
+      };
+    }
+  
+    if (type === 'Booking_Cancel') {
+      if (apiData && (apiData.externalId === 'undefined' || !apiData.crawlingSite)) {
+        console.error(`[Validation Error] Missing required fields for ${type}:`, apiData);
+        return;
+      }
+    } else {
+      if (apiData && (
+        apiData.externalId === 'unknown' || 
+        !apiData.crawlingSite || 
+        !apiData.name || 
+        !apiData.phone || 
+        !apiData.partySize || 
+        !apiData.startDate || 
+        !apiData.endDate || 
+        !apiData.roomId
+      )) {
+        console.error(`[Validation Error] Missing required fields for ${type}:`, apiData);
+        return;
       }
     }
-
-    apiData = {
-      externalId: bookId,
-      name: response.name || 'Unknown',
-      phone: response.phone || '010-0000-0000',
-      partySize: parseInt(response.person || payload.person || 1, 10),
-      startDate: startDateTime,
-      endDate: endDateTime,
-      roomId: roomId ? roomId.toString() : 'unknown',
-      paymented: isPaymentCompleted,
-      paymentAmount: paymentAmount,
-      crawlingSite: 'KimCaddie'
-    };
-
-    console.log(`[DEBUG] Extracted data for API request:
-    - roomId: ${roomId} (from: ${response.room ? 'response.room' : payload.room ? 'payload.room' : 'not found'})
-    - startDate: ${startDateTime} (from: ${response.start_datetime ? 'response.start_datetime' : payload.start_datetime ? 'payload.start_datetime' : 'current time'})
-    - endDate: ${endDateTime} (from: ${response.end_datetime ? 'response.end_datetime' : payload.end_datetime ? 'payload.end_datetime' : 'calculated'})
-    - paymented: ${isPaymentCompleted} (from: paymentStatus Map)
-    - paymentAmount: ${paymentAmount} (from: paymentAmounts Map)`);
-  } else if (type === 'Booking_Update') {
-    apiMethod = 'PATCH';
-    apiUrl = `https://api.dev.24golf.co.kr/stores/${STORE_ID}/reservation/crawl`;
-
-    let startDateTime = payload.start_datetime || null;
-    let endDateTime = payload.end_datetime || null;
-    const roomId = payload.room_id || payload.room || 'unknown';
-
-    if (payload.start_datetime) {
-      startDateTime = payload.start_datetime;
-    } else {
-      const now = new Date();
-      startDateTime = new Date(now.getTime() + (9 * 60 * 60 * 1000)).toISOString().replace('Z', '+09:00');
-    }
-
-    if (payload.end_datetime) {
-      endDateTime = payload.end_datetime;
-    } else {
-      let endDate;
-      if (startDateTime.includes('+09:00')) {
-        endDate = new Date(startDateTime.replace('+09:00', 'Z'));
-        endDate.setHours(endDate.getHours() + 1);
-        endDateTime = endDate.toISOString().replace('Z', '+09:00');
+  
+    try {
+      console.log(`[API Request] Sending ${type} to ${apiUrl} with data:`, JSON.stringify(apiData, null, 2));
+      let apiResponse;
+      if (apiMethod === 'DELETE') {
+        apiResponse = await axios.delete(apiUrl, { headers, data: apiData });
       } else {
-        endDate = new Date(startDateTime);
-        endDate.setHours(endDate.getHours() + 1);
-        endDateTime = endDate.toISOString().replace('Z', '+09:00');
+        apiResponse = await axios({
+          method: apiMethod,
+          url: apiUrl,
+          headers,
+          data: apiData
+        });
+      }
+      console.log(`[API] Successfully sent ${type}: ${apiResponse.status}`);
+      if (type === 'Booking_Create' && response && response.book_id) {
+        processedBookings.add(response.book_id);
+      }
+    } catch (error) {
+      console.error(`[API Error] Failed to send ${type}: ${error.message}`);
+      if (error.response) {
+        console.error(`[API Error] Response status: ${error.response.status}`);
+        console.error(`[API Error] Response data:`, JSON.stringify(error.response.data, null, 2));
       }
     }
-
-    if (startDateTime && !startDateTime.includes('Z') && !startDateTime.includes('+')) {
-      startDateTime = `${startDateTime}+09:00`;
-    }
-
-    if (endDateTime && !endDateTime.includes('Z') && !endDateTime.includes('+')) {
-      endDateTime = `${endDateTime}+09:00`;
-    }
-
-    const name = payload.name || 'Unknown';
-    const phone = payload.phone || '010-0000-0000';
-
-    apiData = {
-      externalId: bookId,
-      name: name,
-      phone: phone,
-      partySize: parseInt(payload.person, 10) || 1,
-      startDate: startDateTime,
-      endDate: endDateTime,
-      roomId: roomId,
-      paymented: isPaymentCompleted,
-      paymentAmount: paymentAmount,
-      crawlingSite: 'KimCaddie'
-    };
-  } else if (type === 'Booking_Cancel') {
-    apiMethod = 'DELETE';
-    apiUrl = `https://api.dev.24golf.co.kr/stores/${STORE_ID}/reservation/crawl`;
-    apiData = {
-      externalId: payload.externalId || 'unknown',
-      crawlingSite: 'KimCaddie',
-      reason: payload.canceled_by || 'Canceled by Manager'
-    };
-  }
-
-  if (type === 'Booking_Cancel') {
-    if (apiData && (apiData.externalId === 'unknown' || !apiData.crawlingSite)) {
-      console.error(`[Validation Error] Missing required fields for ${type}:`, apiData);
-      return;
-    }
-  } else {
-    if (apiData && (
-      apiData.externalId === 'unknown' || 
-      !apiData.crawlingSite || 
-      !apiData.name || 
-      !apiData.phone || 
-      !apiData.partySize || 
-      !apiData.startDate || 
-      !apiData.endDate || 
-      !apiData.roomId
-    )) {
-      console.error(`[Validation Error] Missing required fields for ${type}:`, apiData);
-      return;
-    }
-  }
-
-  try {
-    console.log(`[API Request] Sending ${type} to ${apiUrl} with data:`, JSON.stringify(apiData, null, 2));
-    let apiResponse;
-    if (apiMethod === 'DELETE') {
-      apiResponse = await axios.delete(apiUrl, { headers, data: apiData });
-    } else {
-      apiResponse = await axios({
-        method: apiMethod,
-        url: apiUrl,
-        headers,
-        data: apiData
-      });
-    }
-    console.log(`[API] Successfully sent ${type}: ${apiResponse.status}`);
-    if (type === 'Booking_Create' && response && response.book_id) {
-      processedBookings.add(response.book_id);
-    }
-  } catch (error) {
-    console.error(`[API Error] Failed to send ${type}: ${error.message}`);
-    if (error.response) {
-      console.error(`[API Error] Response status: ${error.response.status}`);
-      console.error(`[API Error] Response data:`, JSON.stringify(error.response.data, null, 2));
-    }
-  }
-};
+  };
 
 // Electron 창 생성
 function createWindow() {
@@ -376,6 +374,36 @@ function createWindow() {
       }
     }, 60000);
 
+    const revenueToBookingMap = new Map(); // revenue_id -> book_id 매핑
+
+    // 응답 감지
+    page.on('response', async (response) => {
+    const url = response.url();
+    if (url.includes('/owner/booking/') && response.request().method() === 'GET') {
+        try {
+        const responseBody = await response.json();
+        console.log(`[DEBUG] /owner/booking/ response received, count: ${responseBody.count}`);
+
+        responseBody.results.forEach((booking) => {
+            const bookId = booking.book_id;
+            const revenueId = booking.revenue;
+            const amount = booking.revenue_detail.amount;
+            const finished = booking.revenue_detail.finished;
+
+            revenueToBookingMap.set(revenueId, bookId);
+            paymentAmounts.set(bookId, amount);
+            paymentStatus.set(bookId, finished);
+
+            //console.log(`[INFO] Mapped revenue ${revenueId} to book_id ${bookId}, amount: ${amount}, finished: ${finished}`);
+            //console.log(`[DEBUG] Current paymentAmounts:`, Array.from(paymentAmounts.entries()));
+            //console.log(`[DEBUG] Current paymentStatus:`, Array.from(paymentStatus.entries()));
+        });
+        } catch (e) {
+        console.error(`[ERROR] Failed to parse /owner/booking/ response: ${e.message}`);
+        }
+    }
+    });
+
     // API 요청 감지
     page.on('request', async (request) => {
       const url = request.url();
@@ -434,6 +462,13 @@ function createWindow() {
           }
         }
 
+            // PATCH /owner/revenue/{revenue_id}/ 요청 감지
+        if (url.match(/\/owner\/revenue\/\d+\/$/) && method === 'PATCH') {
+            const revenueId = parseInt(url.split('/').slice(-2)[0], 10);
+            console.log(`[INFO] Detected PATCH /owner/revenue/${revenueId}/ request`);
+            requestMap.set(url, { url, method, payload, revenueId });
+        }
+
         if (url.includes('/owner/shop/-/') && method === 'GET') {
           requestMap.set(url, { method, payload, type: 'Shop_Info' });
         } else if (url.includes('/owner/customer/') && method === 'GET') {
@@ -444,51 +479,45 @@ function createWindow() {
         } else if (url.includes('/owner/booking') && method === 'POST') {
           console.log(`[DEBUG] Booking_Create Request Captured - URL: ${url}`);
           requestMap.set(url, { method, payload, type: 'Booking_Create' });
-        }else if (url.includes('/booking/change_info') && method === 'PATCH' && (!payload.state || payload.state !== 'canceled')) {
+        } else   if (url.includes('/booking/change_info') && method === 'PATCH' && (!payload.state || payload.state !== 'canceled')) {
             const bookingId = url.split('/').pop().split('?')[0];
             payload.externalId = bookingId;
             console.log(`[DEBUG] Booking_Update Full Payload:`, JSON.stringify(payload, null, 2));
       
-            // HTML에서 결제 정보 수집
             let paymentAmountFromDom = 0;
             let paymentStatusFromDom = false;
             try {
-              // 이용 금액 수집
+              // HTML에서 금액 수집
               await page.waitForSelector('.sc-pktCe.dSKYub .sc-pAyMl.fkDqVf', { timeout: 5000 });
               const paymentAmountText = await page.$eval('.sc-pktCe.dSKYub .sc-pAyMl.fkDqVf', el => el.textContent.trim());
               paymentAmountFromDom = parseInt(paymentAmountText.replace(/[^0-9]/g, ''), 10);
               console.log(`[INFO] Extracted payment amount from DOM: ${paymentAmountFromDom}`);
       
-              // 결제 완료 체크박스 상태 수집
-              await page.waitForSelector('.MuiFormControlLabel-root', { timeout: 5000 }); // 체크박스 상위 요소 대기
-              // DOM 업데이트가 반영될 때까지 약간의 지연 추가
-              await new Promise(resolve => setTimeout(resolve, 500)); // 0.5초 대기
-              paymentStatusFromDom = await page.evaluate(() => {
-                const checkbox = document.querySelector('.PrivateSwitchBase-input.css-1m9pwf3');
-                return checkbox ? checkbox.checked : false;
-              });
-              console.log(`[INFO] Extracted payment status from DOM (via evaluate): ${paymentStatusFromDom}`);
+              // /owner/booking/ 응답 대기
+              await new Promise(resolve => setTimeout(resolve, 3000));
       
-              // 추가 디버깅: 체크박스 상태와 클래스 확인
-              const hasCheckedClass = await page.evaluate(() => {
-                return document.querySelector('.MuiCheckbox-root')?.classList.contains('Mui-checked');
-              });
-              console.log(`[DEBUG] Mui-checked class exists: ${hasCheckedClass}`);
-              if (hasCheckedClass !== paymentStatusFromDom) {
-                console.warn(`[WARN] Inconsistent payment status: checked=${paymentStatusFromDom}, Mui-checked=${hasCheckedClass}`);
-                paymentStatusFromDom = hasCheckedClass; // 클래스 기반으로 보정
+              // API 데이터로 상태 결정
+              paymentAmountFromDom = paymentAmounts.get(bookingId) || paymentAmountFromDom;
+              paymentStatusFromDom = paymentStatus.get(bookingId) || false;
+      
+              console.log(`[INFO] Payment status from API for book_id ${bookingId}: ${paymentStatusFromDom}`);
+              console.log(`[INFO] Payment amount from API for book_id ${bookingId}: ${paymentAmountFromDom}`);
+      
+              if (paymentAmountFromDom !== paymentAmounts.get(bookingId)) {
+                console.warn(`[WARN] Amount mismatch: DOM=${paymentAmountFromDom}, API=${paymentAmounts.get(bookingId)}`);
               }
             } catch (e) {
-              console.error(`[ERROR] Failed to extract payment info from DOM: ${e.message}`);
-              paymentAmountFromDom = 0;
-              paymentStatusFromDom = false;
+              console.error(`[ERROR] Failed to extract payment info: ${e.message}`);
+              paymentAmountFromDom = paymentAmounts.get(bookingId) || 0;
+              paymentStatusFromDom = paymentStatus.get(bookingId) || false;
             }
       
-            // DOM에서 수집한 값으로 paymentAmounts와 paymentStatus 업데이트
+            // API 데이터로 업데이트
             paymentAmounts.set(bookingId, paymentAmountFromDom);
             paymentStatus.set(bookingId, paymentStatusFromDom);
+            console.log(`[DEBUG] Updated paymentStatus for ${bookingId}: ${paymentStatus.get(bookingId)}`);
       
-            // 즉시 Booking_Update 호출
+            // Booking_Update 호출
             await sendTo24GolfApi(
               'Booking_Update',
               url,
@@ -499,8 +528,8 @@ function createWindow() {
               paymentAmounts,
               paymentStatus
             );
-            console.log(`[INFO] Processed Booking_Update for book_id ${bookingId} with DOM data`);
-          }else if (url.includes('/booking/change_info') && method === 'PATCH' && payload.state === 'canceled') {
+            console.log(`[INFO] Processed Booking_Update for book_id ${bookingId} with API data`);
+          }  else if (url.includes('/booking/change_info') && method === 'PATCH' && payload.state === 'canceled') {
           const bookingId = url.split('/').pop().split('?')[0];
           payload.externalId = bookingId;
           await sendTo24GolfApi('Booking_Cancel', url, payload, null, accessToken, processedBookings);
@@ -557,8 +586,8 @@ function createWindow() {
                 paymentStatus.set(bookId, finished);
                 console.log(`[INFO] Stored payment status for book_id ${bookId} (book_idx ${bookIdx}): ${finished} (from /owner/revenue/ response)`);
               }
-              console.log(`[DEBUG] Current paymentAmounts:`, Array.from(paymentAmounts.entries()));
-              console.log(`[DEBUG] Current paymentStatus:`, Array.from(paymentStatus.entries()));
+              //console.log(`[DEBUG] Current paymentAmounts:`, Array.from(paymentAmounts.entries()));
+              //console.log(`[DEBUG] Current paymentStatus:`, Array.from(paymentStatus.entries()));
 
               if (bookingDataMap.has(bookId)) {
                 const { type, payload } = bookingDataMap.get(bookId);
