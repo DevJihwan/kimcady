@@ -4,7 +4,14 @@ const { launchBrowser } = require('./services/puppeteer');
 const { getAccessToken, getStoreInfo } = require('./utils/api');
 const { setupRequestHandler } = require('./handlers/request');
 const { setupResponseHandler } = require('./handlers/response');
-const { getStoreId, saveStoreId, TIMEOUT_MS } = require('./config/env');
+const { 
+  getStoreId, 
+  saveStoreId, 
+  getUserCredentials, 
+  saveUserCredentials, 
+  clearUserCredentials,
+  TIMEOUT_MS 
+} = require('./config/env');
 
 // 글로벌 변수
 let accessToken = null;
@@ -182,6 +189,54 @@ function setupIpcHandlers() {
         success: false, 
         error: '매장 ID 저장 중 오류가 발생했습니다.' 
       });
+    }
+  });
+  
+  // 로그인 상태 요청 처리
+  ipcMain.on('get-login-status', (event) => {
+    try {
+      const { hasCredentials } = getUserCredentials();
+      event.reply('login-status-response', hasCredentials);
+    } catch (error) {
+      console.error(`[ERROR] Error getting login status: ${error.message}`);
+      event.reply('login-status-response', false);
+    }
+  });
+  
+  // 계정 정보 요청 처리
+  ipcMain.on('get-credentials', (event) => {
+    try {
+      const credentials = getUserCredentials();
+      event.reply('credentials-response', credentials);
+    } catch (error) {
+      console.error(`[ERROR] Error getting credentials: ${error.message}`);
+      event.reply('credentials-response', { 
+        phone: '', 
+        password: '', 
+        hasCredentials: false 
+      });
+    }
+  });
+  
+  // 계정 정보 저장 처리
+  ipcMain.on('save-credentials', (event, { phone, password }) => {
+    try {
+      const result = saveUserCredentials(phone, password);
+      event.reply('save-credentials-response', { success: result });
+    } catch (error) {
+      console.error(`[ERROR] Error saving credentials: ${error.message}`);
+      event.reply('save-credentials-response', { success: false });
+    }
+  });
+  
+  // 계정 정보 삭제 처리
+  ipcMain.on('clear-credentials', (event) => {
+    try {
+      const result = clearUserCredentials();
+      event.reply('clear-credentials-response', { success: result });
+    } catch (error) {
+      console.error(`[ERROR] Error clearing credentials: ${error.message}`);
+      event.reply('clear-credentials-response', { success: false });
     }
   });
   
