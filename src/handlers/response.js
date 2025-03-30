@@ -40,9 +40,18 @@ const setupResponseHandler = (page, accessToken, maps) => {
               timestamp: Date.now()
             };
             
-            // Store this data temporarily to use after we get booking data
-            console.log(`[DEBUG] Storing revenue update data for revenue ID ${revenueId}, bookIdx ${patchPayload.book_idx}: amount=${tmpData.amount}, finished=${tmpData.finished}`);
-            requestMap.set(`tmp_revenue_${revenueId}`, tmpData);
+            // 이미 book_id를 알고 있는 경우 즉시 결제 정보 업데이트
+            const bookId = findBookIdByRevenueIdOrBookIdx(revenueId, patchPayload.book_idx, maps);
+            if (bookId) {
+              console.log(`[INFO] Found book_id ${bookId} for revenue ID ${revenueId} (or book_idx ${patchPayload.book_idx})`);
+              paymentAmounts.set(bookId, tmpData.amount);
+              paymentStatus.set(bookId, tmpData.finished);
+              console.log(`[INFO] Updated payment for book_id ${bookId}: amount=${tmpData.amount}, finished=${tmpData.finished}`);
+            } else {
+              // Store this data temporarily to use after we get booking data
+              console.log(`[DEBUG] Storing revenue update data for revenue ID ${revenueId}, bookIdx ${patchPayload.book_idx}: amount=${tmpData.amount}, finished=${tmpData.finished}`);
+              requestMap.set(`tmp_revenue_${revenueId}`, tmpData);
+            }
           }
         }
       }
@@ -94,6 +103,28 @@ const setupResponseHandler = (page, accessToken, maps) => {
       console.error(`[ERROR] Error handling response for ${url}: ${error.message}`);
     }
   });
+};
+
+// book ID 찾기 (revenue ID 또는 book_idx로)
+const findBookIdByRevenueIdOrBookIdx = (revenueId, bookIdx, maps) => {
+  const { revenueToBookingMap, bookIdToIdxMap } = maps;
+  
+  // 먼저 revenue ID로 찾기
+  let bookId = revenueToBookingMap.get(revenueId);
+  if (bookId) {
+    return bookId;
+  }
+  
+  // 없으면 book_idx로 찾기
+  if (bookIdx) {
+    const entries = Array.from(bookIdToIdxMap.entries());
+    const match = entries.find(([, idx]) => idx === bookIdx);
+    if (match) {
+      return match[0];  // book ID
+    }
+  }
+  
+  return null;
 };
 
 const extractRevenueId = (url) => {
