@@ -46,10 +46,11 @@ const sendTo24GolfApi = async (type, url, payload, response, accessToken, proces
   }
 
   // 결제 정보 로깅 및 확인
+  // 항상 저장된 맵에서 결제 정보를 가져옴
   const paymentAmount = paymentAmounts.get(bookId) || 0;
   const isPaymentCompleted = paymentStatus.get(bookId) || false;
   
-  console.log(`[DEBUG] Payment info for ${bookId} - Amount: ${paymentAmount}, Completed: ${isPaymentCompleted}`);
+  console.log(`[DEBUG] Payment info from maps for ${bookId} - Amount: ${paymentAmount}, Completed: ${isPaymentCompleted}`);
 
   const timestamp = new Date().toISOString();
   console.log(`[${timestamp}] ${type} - URL: ${url} - Payload:`, JSON.stringify(payload, null, 2));
@@ -101,21 +102,14 @@ const sendTo24GolfApi = async (type, url, payload, response, accessToken, proces
     return;
   }
 
-  // Double-check payment info before sending
+  // 최종 결제 정보 업데이트 (paymentAmounts, paymentStatus의 최신 값만 사용)
   if ((type === 'Booking_Create' || type === 'Booking_Update') && apiData) {
-    // Ensure we're using the latest payment info from the maps
-    const latestPaymentAmount = paymentAmounts.get(bookId);
-    const latestPaymentStatus = paymentStatus.get(bookId);
+    const currentAmount = paymentAmounts.get(bookId);
+    const currentStatus = paymentStatus.get(bookId);
     
-    if (latestPaymentAmount !== undefined) {
-      apiData.paymentAmount = latestPaymentAmount;
-    }
+    apiData.paymentAmount = currentAmount || 0;
+    apiData.paymented = currentStatus || false;
     
-    if (latestPaymentStatus !== undefined) {
-      apiData.paymented = latestPaymentStatus;
-    }
-    
-    // Log final data being sent
     console.log(`[DEBUG] Final payment values for ${bookId}: Amount=${apiData.paymentAmount}, Completed=${apiData.paymented}`);
   }
 
