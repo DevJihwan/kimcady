@@ -10,7 +10,11 @@ const createWindow = () => {
     height,
     x: 0,
     y: 0,
-    webPreferences: { nodeIntegration: true, contextIsolation: false },
+    webPreferences: { 
+      nodeIntegration: true, 
+      contextIsolation: false,
+      webSecurity: false
+    },
     show: false,
   });
 
@@ -25,14 +29,25 @@ const createWindow = () => {
 };
 
 const setupElectron = () => {
-  app.whenReady().then(() => {
-    createWindow();
-    app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  let mainWindow = null;
+  
+  if (app.isReady()) {
+    mainWindow = createWindow();
+  } else {
+    app.whenReady().then(() => {
+      mainWindow = createWindow();
+      
+      app.on('activate', () => {
+        if (BrowserWindow.getAllWindows().length === 0) {
+          mainWindow = createWindow();
+        }
+      });
     });
-  });
+  }
 
   app.on('window-all-closed', () => app.quit());
+  
+  return mainWindow;
 };
 
 module.exports = { setupElectron };
