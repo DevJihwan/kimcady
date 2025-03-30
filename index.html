@@ -192,6 +192,17 @@
       border-color: #1b1f2326;
     }
 
+    .btn-danger {
+      color: #ffffff;
+      background-color: #d73a49;
+      border-color: #d73a49;
+    }
+    
+    .btn-danger:hover {
+      background-color: #cb2431;
+      border-color: #cb2431;
+    }
+
     .store-info {
       margin-top: 12px;
       padding: 12px;
@@ -208,6 +219,32 @@
     .store-info p {
       margin: 0;
       font-size: 14px;
+    }
+
+    .settings-section {
+      display: flex;
+      justify-content: space-between;
+      padding: 12px 0;
+      border-top: 1px solid #e1e4e8;
+      margin-top: 12px;
+    }
+
+    .login-status {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    .login-status.active {
+      background-color: #e6ffec;
+      color: #22863a;
+    }
+
+    .login-status.inactive {
+      background-color: #ffebe9;
+      color: #d73a49;
     }
 
     /* 반응형 디자인 */
@@ -245,6 +282,16 @@
         <p id="storeBranch"></p>
       </div>
       
+      <div class="settings-section">
+        <div>
+          <h4>로그인 정보</h4>
+          <p id="loginStatus">
+            <span class="login-status inactive">미설정</span>
+          </p>
+        </div>
+        <button class="btn btn-secondary" onclick="openAccountModal()">계정 설정</button>
+      </div>
+      
       <div style="margin-top: 16px; text-align: right;">
         <button class="btn btn-secondary" onclick="openSettingsModal()">매장 설정</button>
       </div>
@@ -272,11 +319,40 @@
           <label for="storeId">매장 ID</label>
           <input type="text" class="form-control" id="storeId" placeholder="매장 ID를 입력하세요">
         </div>
-        <p id="validationMessage" style="color: #d73a49; font-size: 14px; display: none;"></p>
+        <p id="storeValidationMessage" style="color: #d73a49; font-size: 14px; display: none;"></p>
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary" onclick="closeSettingsModal()">취소</button>
         <button class="btn" onclick="saveStoreId()">저장</button>
+      </div>
+    </div>
+  </div>
+  
+  <!-- 계정 설정 모달 -->
+  <div class="modal" id="accountModal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>계정 설정</h2>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label for="phoneNumber">핸드폰 번호 (숫자만)</label>
+          <input type="text" class="form-control" id="phoneNumber" placeholder="01012345678">
+        </div>
+        <div class="form-group">
+          <label for="password">비밀번호</label>
+          <input type="password" class="form-control" id="password" placeholder="비밀번호">
+        </div>
+        <p id="accountValidationMessage" style="color: #d73a49; font-size: 14px; display: none;"></p>
+        <p style="font-size: 13px; color: #586069; margin-top: 16px;">
+          * 계정 정보는 자동 로그인을 위해 사용됩니다.<br>
+          * 암호화하여 로컬에 안전하게 저장됩니다.
+        </p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-danger" onclick="clearCredentials()" id="clearCredentialsButton" style="display: none; margin-right: auto;">계정 삭제</button>
+        <button class="btn btn-secondary" onclick="closeAccountModal()">취소</button>
+        <button class="btn" onclick="saveCredentials()">저장</button>
       </div>
     </div>
   </div>
@@ -288,6 +364,7 @@
     // DOM 로드 완료 시 초기화
     document.addEventListener('DOMContentLoaded', () => {
       loadStoreInfo();
+      loadLoginStatus();
     });
     
     // 매장 정보 로드
@@ -314,6 +391,25 @@
       });
     }
     
+    // 로그인 상태 로드
+    function loadLoginStatus() {
+      ipcRenderer.send('get-login-status');
+      
+      // 로그인 상태 응답 처리
+      ipcRenderer.on('login-status-response', (event, hasCredentials) => {
+        const loginStatusEl = document.getElementById('loginStatus');
+        const clearCredentialsButton = document.getElementById('clearCredentialsButton');
+        
+        if (hasCredentials) {
+          loginStatusEl.innerHTML = '<span class="login-status active">설정됨</span>';
+          clearCredentialsButton.style.display = 'block';
+        } else {
+          loginStatusEl.innerHTML = '<span class="login-status inactive">미설정</span>';
+          clearCredentialsButton.style.display = 'none';
+        }
+      });
+    }
+    
     // 매장 설정 모달 열기
     function openSettingsModal() {
       // 현재 매장 ID 가져오기
@@ -322,7 +418,7 @@
       // 현재 매장 ID 응답 처리
       ipcRenderer.once('current-store-id', (event, storeId) => {
         document.getElementById('storeId').value = storeId || '';
-        document.getElementById('validationMessage').style.display = 'none';
+        document.getElementById('storeValidationMessage').style.display = 'none';
         document.getElementById('settingsModal').classList.add('active');
       });
     }
@@ -332,10 +428,34 @@
       document.getElementById('settingsModal').classList.remove('active');
     }
     
+    // 계정 설정 모달 열기
+    function openAccountModal() {
+      // 현재 계정 정보 가져오기
+      ipcRenderer.send('get-credentials');
+      
+      // 현재 계정 정보 응답 처리
+      ipcRenderer.once('credentials-response', (event, data) => {
+        document.getElementById('phoneNumber').value = data.phone || '';
+        document.getElementById('password').value = data.password || '';
+        document.getElementById('accountValidationMessage').style.display = 'none';
+        
+        // 계정 삭제 버튼 표시/숨김
+        document.getElementById('clearCredentialsButton').style.display = 
+          data.hasCredentials ? 'block' : 'none';
+          
+        document.getElementById('accountModal').classList.add('active');
+      });
+    }
+    
+    // 계정 설정 모달 닫기
+    function closeAccountModal() {
+      document.getElementById('accountModal').classList.remove('active');
+    }
+    
     // 매장 ID 저장
     function saveStoreId() {
       const storeId = document.getElementById('storeId').value.trim();
-      const validationMessageEl = document.getElementById('validationMessage');
+      const validationMessageEl = document.getElementById('storeValidationMessage');
       
       // 기본 유효성 검사
       if (!storeId) {
@@ -380,6 +500,88 @@
         } else {
           validationMessageEl.textContent = result.error || '유효하지 않은 매장 ID입니다.';
           validationMessageEl.style.display = 'block';
+        }
+      });
+    }
+    
+    // 계정 정보 저장
+    function saveCredentials() {
+      const phone = document.getElementById('phoneNumber').value.trim();
+      const password = document.getElementById('password').value;
+      const validationMessageEl = document.getElementById('accountValidationMessage');
+      
+      // 기본 유효성 검사
+      if (!phone) {
+        validationMessageEl.textContent = '핸드폰 번호를 입력해주세요.';
+        validationMessageEl.style.display = 'block';
+        return;
+      }
+      
+      if (!password) {
+        validationMessageEl.textContent = '비밀번호를 입력해주세요.';
+        validationMessageEl.style.display = 'block';
+        return;
+      }
+      
+      // 숫자만 입력되었는지 확인
+      if (!/^\d+$/.test(phone)) {
+        validationMessageEl.textContent = '핸드폰 번호는 숫자만 입력해주세요.';
+        validationMessageEl.style.display = 'block';
+        return;
+      }
+      
+      // 계정 정보 저장 요청
+      ipcRenderer.send('save-credentials', {
+        phone,
+        password
+      });
+      
+      // 저장 결과 처리
+      ipcRenderer.once('save-credentials-response', (event, result) => {
+        if (result.success) {
+          // 모달 닫기
+          closeAccountModal();
+          
+          // 로그인 상태 다시 로드
+          loadLoginStatus();
+          
+          // 성공 메시지
+          alert('계정 정보가 저장되었습니다.\n다음 실행 시 자동 로그인이 진행됩니다.');
+        } else {
+          validationMessageEl.textContent = '계정 정보 저장에 실패했습니다.';
+          validationMessageEl.style.display = 'block';
+        }
+      });
+    }
+    
+    // 계정 정보 삭제
+    function clearCredentials() {
+      // 삭제 확인
+      const confirmed = window.confirm(
+        '저장된 계정 정보를 삭제하시겠습니까?\n\n' + 
+        '삭제 후에는 자동 로그인이 동작하지 않습니다.'
+      );
+      
+      if (!confirmed) {
+        return;
+      }
+      
+      // 계정 정보 삭제 요청
+      ipcRenderer.send('clear-credentials');
+      
+      // 삭제 결과 처리
+      ipcRenderer.once('clear-credentials-response', (event, result) => {
+        if (result.success) {
+          // 모달 닫기
+          closeAccountModal();
+          
+          // 로그인 상태 다시 로드
+          loadLoginStatus();
+          
+          // 성공 메시지
+          alert('계정 정보가 삭제되었습니다.');
+        } else {
+          alert('계정 정보 삭제에 실패했습니다.');
         }
       });
     }
