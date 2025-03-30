@@ -3,6 +3,9 @@ const { parseMultipartFormData } = require('../utils/parser');
 
 const setupResponseHandler = (page, accessToken, maps) => {
   const { requestMap, processedBookings, paymentAmounts, paymentStatus, bookIdToIdxMap, revenueToBookingMap, bookingDataMap } = maps;
+  
+  // 새로운 맵 추가 - 앱 예약 처리용
+  const customerUpdates = new Map(); // 최근 고객 정보 업데이트 저장
 
   page.on('response', async (response) => {
     const url = response.url();
@@ -18,9 +21,18 @@ const setupResponseHandler = (page, accessToken, maps) => {
     }
 
     try {
+      // 고객 정보 API (앱 예약 감지)
+      if (url.includes('/api/owner/customer/') && method === 'GET' && status === 200) {
+        await handleCustomerResponse(response, customerUpdates);
+      }
+      
       // /owner/booking/ GET 응답 처리 (Getting existing bookings and payment info)
-      if (url.includes('/owner/booking/') && method === 'GET' && status === 200) {
+      else if (url.includes('/owner/booking/') && method === 'GET' && status === 200) {
         await handleBookingListingResponse(response, maps);
+        
+        // 앱 예약 처리 시도 (최근 업데이트된 고객 정보 기반)
+        await processAppBookings(response, accessToken, maps, customerUpdates);
+        
         // After processing booking listing, we need to process any pending booking updates
         await processPendingBookingUpdates(accessToken, maps);
       }
@@ -80,6 +92,151 @@ const setupResponseHandler = (page, accessToken, maps) => {
       console.error(`[ERROR] Error handling response for ${url}: ${error.message}`);
     }
   });
+};
+
+// 고객 정보 응답 처리 (앱 예약 감지용)
+const handleCustomerResponse = async (response, customerUpdates) => {
+  try {
+    const customerData = await response.json();
+    
+    if (!customerData || !customerData.id) {
+      console.log(`[WARN] Invalid customer data response format`);
+      return;
+    }
+    
+    const customerId = customerData.id;
+    const customerName = customerData.name || '';
+    const customerPhone = customerData.phone || '';
+    
+    // 고객 정보 중 최근 업데이트 정보 확인
+    let latestUpdateTime = null;
+    
+    if (customerData.customerinfo_set && Array.isArray(customerData.customerinfo_set) && customerData.customerinfo_set.length > 0) {
+      const customerInfo = customerData.customerinfo_set[0];
+      if (customerInfo.upd_date) {
+        latestUpdateTime = new Date(customerInfo.upd_date).getTime();
+      }
+    }
+    
+    console.log(`[INFO] Detected customer info access - customerId: ${customerId}, name: ${customerName}, updateTime: ${latestUpdateTime}`);
+    
+    // 현재 시간 기준으로 최근 업데이트된 고객 정보만 저장 (30초 이내)
+    const now = Date.now();
+    const thirtySecondsAgo = now - 30 * 1000;
+    
+    if (latestUpdateTime && latestUpdateTime > thirtySecondsAgo) {
+      console.log(`[INFO] Storing recent customer update for customerId: ${customerId}`);
+      customerUpdates.set(customerId, {
+        id: customerId,
+        name: customerName,
+        phone: customerPhone,
+        updateTime: latestUpdateTime,
+        timestamp: now
+      });
+    }
+  } catch (e) {
+    console.error(`[ERROR] Failed to parse customer response: ${e.message}`);
+  }
+};
+
+// 앱 예약 처리 (예약 목록 조회 후)
+const processAppBookings = async (response, accessToken, maps, customerUpdates) => {
+  const { processedBookings, paymentAmounts, paymentStatus } = maps;
+  
+  try {
+    // 예약 목록 파싱
+    const bookingData = await response.json();
+    if (!bookingData.results || !Array.isArray(bookingData.results)) {
+      return;
+    }
+    
+    console.log(`[INFO] Checking for app bookings in booking list...`);
+    
+    // 최근 고객 업데이트와 매칭되는 예약 찾기
+    for (const booking of bookingData.results) {
+      if (!booking.book_id || !booking.customer || processedBookings.has(booking.book_id)) {
+        continue;
+      }
+      
+      const bookId = booking.book_id;
+      const customerId = booking.customer;
+      const customerUpdate = customerUpdates.get(customerId);
+      
+      // 앱 예약만 찾기 (book_type이 'U'이고 customer 필드가 있는 경우)
+      const isAppBooking = booking.book_type === 'U' || booking.confirmed_by === 'IM' || booking.immediate_booked === true;
+      
+      if (isAppBooking) {
+        // 최근 고객 업데이트가 있거나, 일반 앱 예약인 경우
+        const isRecentUpdate = customerUpdate && (Date.now() - customerUpdate.timestamp < 60 * 1000); // 1분 이내
+        
+        if (isRecentUpdate || booking.immediate_booked === true) {
+          console.log(`[INFO] Detected ${booking.immediate_booked ? 'immediate' : 'regular'} app booking: bookId=${bookId}, customerId=${customerId}`);
+          
+          // 결제 정보 가져오기
+          const revenueDetail = booking.revenue_detail || {};
+          const amount = revenueDetail.amount || 0;
+          const finished = revenueDetail.finished || false;
+          
+          // 맵에 저장
+          paymentAmounts.set(bookId, amount);
+          paymentStatus.set(bookId, finished);
+          
+          // 예약 생성 API 호출
+          const bookingData = {
+            externalId: bookId,
+            name: booking.name || 'Unknown',
+            phone: booking.phone || '010-0000-0000',
+            partySize: parseInt(booking.person || 1, 10),
+            startDate: booking.start_datetime,
+            endDate: booking.end_datetime,
+            roomId: booking.room?.toString() || 'unknown',
+            hole: booking.hole,
+            paymented: finished,
+            paymentAmount: amount,
+            crawlingSite: 'KimCaddie',
+            bookType: booking.book_type,
+            immediate: booking.immediate_booked || false
+          };
+          
+          try {
+            // Make sure we have a valid token
+            let currentToken = accessToken;
+            if (!currentToken) {
+              currentToken = await getAccessToken();
+            }
+            
+            console.log(`[INFO] Processing App Booking_Create for book_id: ${bookId}`);
+            
+            await sendTo24GolfApi(
+              'Booking_Create', 
+              '', 
+              {}, 
+              bookingData, 
+              currentToken, 
+              processedBookings, 
+              paymentAmounts, 
+              paymentStatus
+            );
+            
+            console.log(`[INFO] Processed App Booking_Create for book_id: ${bookId}`);
+            processedBookings.add(bookId); // 중복 처리 방지
+          } catch (error) {
+            console.error(`[ERROR] Failed to process App Booking_Create: ${error.message}`);
+          }
+        }
+      }
+    }
+    
+    // 오래된 고객 업데이트 정보 정리
+    const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
+    for (const [customerId, data] of customerUpdates.entries()) {
+      if (data.timestamp < fiveMinutesAgo) {
+        customerUpdates.delete(customerId);
+      }
+    }
+  } catch (e) {
+    console.error(`[ERROR] Failed to process app bookings: ${e.message}`);
+  }
 };
 
 // 보류 중인 모든 예약 업데이트 처리
