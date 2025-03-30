@@ -39,13 +39,19 @@ const setupRequestHandler = (page, accessToken, maps) => {
       payload.externalId = bookingId;
       console.log(`[DEBUG] Booking change detected - URL: ${url}, BookingId: ${bookingId}, Payload:`, JSON.stringify(payload, null, 2));
 
+      // 이미 결제 정보가 있는지 확인 및 로깅
+      const existingPaymentAmount = paymentAmounts.get(bookingId) || 0;
+      const existingPaymentStatus = paymentStatus.get(bookingId) || false;
+      console.log(`[DEBUG] Existing payment info for ${bookingId}: Amount=${existingPaymentAmount}, Completed=${existingPaymentStatus}`);
+
       // Check if it's a cancellation
       if (payload.state && payload.state === 'canceled') {
         console.log(`[INFO] Booking_Cancel detected for book_id: ${bookingId}`);
         try {
           // Make sure we have a valid token
-          if (!accessToken) {
-            accessToken = await getAccessToken();
+          let currentToken = accessToken;
+          if (!currentToken) {
+            currentToken = await getAccessToken();
           }
           
           await sendTo24GolfApi(
@@ -53,7 +59,7 @@ const setupRequestHandler = (page, accessToken, maps) => {
             url, 
             payload, 
             null, 
-            accessToken, 
+            currentToken, 
             processedBookings, 
             paymentAmounts, 
             paymentStatus
@@ -77,7 +83,7 @@ const setupRequestHandler = (page, accessToken, maps) => {
     }
 
     // PATCH /owner/revenue/
-    else if (url.match(/\\/owner\\/revenue\\/\\d+\\/$/) && method === 'PATCH') {
+    else if (url.match(/\/owner\/revenue\/\d+\/$/) && method === 'PATCH') {
       const revenueId = parseInt(url.split('/').slice(-2)[0], 10);
       console.log(`[INFO] Detected PATCH /owner/revenue/${revenueId}/`);
       requestMap.set(url, { url, method, payload, revenueId });
@@ -135,12 +141,31 @@ const handleBookingUpdate = async (page, url, payload, accessToken, maps) => {
   console.log(`[INFO] Processing Booking_Update for book_id: ${bookingId}`);
 
   try {
-    // Getting payment info from DOM with better error handling
+    // 이미 저장된 결제 정보가 있는지 먼저 확인
+    const existingAmount = paymentAmounts.get(bookingId);
+    const existingStatus = paymentStatus.get(bookingId);
+    
+    if (existingAmount && existingAmount > 0) {
+      console.log(`[INFO] Using existing payment amount for book_id ${bookingId}: ${existingAmount}`);
+      paymentAmountFromDom = existingAmount;
+    }
+    
+    if (existingStatus) {
+      console.log(`[INFO] Using existing payment status for book_id ${bookingId}: ${existingStatus}`);
+      paymentStatusFromDom = existingStatus;
+    }
+
+    // DOM에서도 결제 정보를 추출 시도
     try {
       await page.waitForSelector('.sc-pktCe.dSKYub .sc-pAyMl.fkDqVf', { timeout: 5000 });
       const paymentAmountText = await page.$eval('.sc-pktCe.dSKYub .sc-pAyMl.fkDqVf', el => el.textContent.trim());
-      paymentAmountFromDom = parseInt(paymentAmountText.replace(/[^0-9]/g, ''), 10) || 0;
-      console.log(`[INFO] Extracted payment amount from DOM: ${paymentAmountFromDom}`);
+      const extractedAmount = parseInt(paymentAmountText.replace(/[^0-9]/g, ''), 10) || 0;
+      
+      if (extractedAmount > 0) {
+        paymentAmountFromDom = extractedAmount;
+        paymentStatusFromDom = true; // 금액이 있으면 결제 완료로 간주
+        console.log(`[INFO] Extracted payment amount from DOM: ${paymentAmountFromDom}`);
+      }
     } catch (domError) {
       console.log(`[WARN] Could not extract payment info from DOM: ${domError.message}`);
       // Try alternative selectors if needed
@@ -151,9 +176,13 @@ const handleBookingUpdate = async (page, url, payload, accessToken, maps) => {
         for (const el of elements) {
           const text = await page.evaluate(element => element.textContent, el);
           if (text && /\d+/.test(text)) {
-            paymentAmountFromDom = parseInt(text.replace(/[^0-9]/g, ''), 10) || 0;
-            console.log(`[INFO] Found payment amount using alternative selector: ${paymentAmountFromDom}`);
-            break;
+            const extractedAmount = parseInt(text.replace(/[^0-9]/g, ''), 10) || 0;
+            if (extractedAmount > 0) {
+              paymentAmountFromDom = extractedAmount;
+              paymentStatusFromDom = true;
+              console.log(`[INFO] Found payment amount using alternative selector: ${paymentAmountFromDom}`);
+              break;
+            }
           }
         }
       } catch (altError) {
@@ -164,26 +193,34 @@ const handleBookingUpdate = async (page, url, payload, accessToken, maps) => {
     // Wait a bit to ensure we have all data
     await new Promise(resolve => setTimeout(resolve, 3000));
     
-    // Use existing values from maps as fallback
-    paymentAmountFromDom = paymentAmounts.get(bookingId) || paymentAmountFromDom || 0;
-    paymentStatusFromDom = paymentStatus.get(bookingId) || false;
+    // 최종 결제 정보 결정
+    // 우선순위: DOM에서 추출 > 맵에 저장된 값 > 기본값
+    if (paymentAmountFromDom <= 0) {
+      paymentAmountFromDom = existingAmount || 0;
+    }
+    
+    if (!paymentStatusFromDom) {
+      paymentStatusFromDom = existingStatus || false;
+    }
 
     console.log(`[INFO] Final payment status for book_id ${bookingId}: ${paymentStatusFromDom}`);
     console.log(`[INFO] Final payment amount for book_id ${bookingId}: ${paymentAmountFromDom}`);
+    
+    // 맵 업데이트
+    paymentAmounts.set(bookingId, paymentAmountFromDom);
+    paymentStatus.set(bookingId, paymentStatusFromDom);
   } catch (e) {
     console.error(`[ERROR] Failed to process payment info: ${e.message}`);
+    // 에러 발생 시 맵에 저장된 값 사용
     paymentAmountFromDom = paymentAmounts.get(bookingId) || 0;
     paymentStatusFromDom = paymentStatus.get(bookingId) || false;
   }
 
-  // Update maps with the latest values
-  paymentAmounts.set(bookingId, paymentAmountFromDom);
-  paymentStatus.set(bookingId, paymentStatusFromDom);
-  
   // Make sure we have a token
-  if (!accessToken) {
+  let currentToken = accessToken;
+  if (!currentToken) {
     try {
-      accessToken = await getAccessToken();
+      currentToken = await getAccessToken();
     } catch (error) {
       console.error(`[ERROR] Failed to refresh token for Booking_Update: ${error.message}`);
       return;
@@ -196,7 +233,7 @@ const handleBookingUpdate = async (page, url, payload, accessToken, maps) => {
     url, 
     payload, 
     null, 
-    accessToken, 
+    currentToken, 
     processedBookings, 
     paymentAmounts, 
     paymentStatus
