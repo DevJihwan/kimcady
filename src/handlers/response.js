@@ -128,7 +128,12 @@ const handleRevenueResponse = async (response, request, maps) => {
 
     const bookIdx = payload.book_idx;
     const amount = parseInt(payload.amount, 10) || 0;
-    const finished = responseData.finished || payload.finished === 'true';
+    
+    // 중요: string 'true'/'false'를 실제 boolean으로 변환
+    const finishedStr = payload.finished?.toLowerCase() || 'false';
+    const finished = finishedStr === 'true';
+    
+    console.log(`[DEBUG] Payment status in revenue payload: '${payload.finished}' -> ${finished}`);
 
     // Find the book_id using the book_idx
     const bookIdEntries = Array.from(bookIdToIdxMap.entries());
@@ -194,7 +199,7 @@ const handleBookingCreateResponse = async (url, response, requestMap, accessToke
     const isPaymentCompleted = paymentStatus.get(bookId) || false;
     
     // 결제 정보가 이미 있으면 바로 API 호출
-    if (paymentAmount > 0 && isPaymentCompleted) {
+    if (paymentAmount > 0) {
       console.log(`[INFO] Payment information already available for book_id ${bookId}: amount=${paymentAmount}, completed=${isPaymentCompleted}`);
       
       // Check for a valid token
