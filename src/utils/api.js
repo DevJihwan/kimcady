@@ -77,8 +77,6 @@ const sendTo24GolfApi = async (type, url, payload, response, accessToken, proces
         paymented: isPaymentCompleted,
         paymentAmount,
         crawlingSite: 'KimCaddie',
-        bookType: 'app',
-        immediate: response.immediate || false,
         hole: response.hole || '18'
       };
       console.log(`[INFO] Creating API data for app booking, bookType: ${response.bookType}, immediate: ${response.immediate}`);
@@ -94,8 +92,7 @@ const sendTo24GolfApi = async (type, url, payload, response, accessToken, proces
         roomId: (response.room || payload?.room || payload?.room_id || 'unknown').toString(),
         paymented: isPaymentCompleted,
         paymentAmount,
-        crawlingSite: 'KimCaddie',
-        bookType: 'web'
+        crawlingSite: 'KimCaddie'
       };
     }
   } else if (type === 'Booking_Update') {
@@ -111,7 +108,7 @@ const sendTo24GolfApi = async (type, url, payload, response, accessToken, proces
       roomId: payload.room_id || payload.room || 'unknown',
       paymented: isPaymentCompleted,
       paymentAmount,
-      crawlingSite: 'KimCaddie',
+      crawlingSite: 'KimCaddie'
     };
   } else if (type === 'Booking_Cancel') {
     apiMethod = 'DELETE';
