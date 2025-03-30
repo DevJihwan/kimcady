@@ -76,10 +76,9 @@ const sendTo24GolfApi = async (type, url, payload, response, accessToken, proces
         roomId: response.roomId || 'unknown',
         paymented: isPaymentCompleted,
         paymentAmount,
-        crawlingSite: 'KimCaddie',
-        hole: response.hole || '18'
+        crawlingSite: 'KimCaddie'
       };
-      console.log(`[INFO] Creating API data for app booking, bookType: ${response.bookType}, immediate: ${response.immediate}`);
+      console.log(`[INFO] Creating API data for app booking`);
     } else {
       // 웹 예약 처리 (기존 방식)
       apiData = {
