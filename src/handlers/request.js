@@ -39,11 +39,6 @@ const setupRequestHandler = (page, accessToken, maps) => {
       payload.externalId = bookingId;
       console.log(`[DEBUG] Booking change detected - URL: ${url}, BookingId: ${bookingId}, Payload:`, JSON.stringify(payload, null, 2));
 
-      // 이미 결제 정보가 있는지 확인 및 로깅 (항상 저장된 값 사용)
-      const existingPaymentAmount = paymentAmounts.get(bookingId) || 0;
-      const existingPaymentStatus = paymentStatus.get(bookingId) || false;
-      console.log(`[DEBUG] Existing payment info for ${bookingId}: Amount=${existingPaymentAmount}, Completed=${existingPaymentStatus}`);
-
       // Check if it's a cancellation
       if (payload.state && payload.state === 'canceled') {
         console.log(`[INFO] Booking_Cancel detected for book_id: ${bookingId}`);
@@ -69,13 +64,18 @@ const setupRequestHandler = (page, accessToken, maps) => {
           console.error(`[ERROR] Failed to process Booking_Cancel: ${error.message}`);
         }
       } else {
-        // It's an update
-        console.log(`[INFO] Booking_Update detected for book_id: ${bookingId}`);
-        try {
-          await handleBookingUpdate(page, url, payload, accessToken, maps);
-        } catch (error) {
-          console.error(`[ERROR] Failed to process Booking_Update: ${error.message}`);
-        }
+        // It's an update - store the information for later processing
+        console.log(`[INFO] Booking_Update detected for book_id: ${bookingId} - storing for later processing`);
+        
+        // 중요: 예약 변경 정보 저장해두고 나중에 처리
+        bookingDataMap.set(`pendingUpdate_${bookingId}`, {
+          type: 'Booking_Update_Pending',
+          url,
+          payload,
+          timestamp: Date.now()
+        });
+        
+        // Booking update will be processed after receiving revenue & booking data
       }
 
       // Store in request map for further reference
@@ -101,23 +101,40 @@ const setupRequestHandler = (page, accessToken, maps) => {
           if (bookId) {
             console.log(`[INFO] Found matching book_id ${bookId} for revenue ID ${revenueId}`);
             
-            // 결제 정보 업데이트
-            paymentAmounts.set(bookId, amount);
-            paymentStatus.set(bookId, finished);
+            // 결제 정보 임시 저장 (나중에 booking 데이터와 함께 사용)
+            requestMap.set(`revenueUpdate_${revenueId}`, {
+              revenueId,
+              bookId,
+              bookIdx,
+              amount,
+              finished,
+              timestamp: Date.now()
+            });
             
-            console.log(`[INFO] Updated payment info for book_id ${bookId}: amount=${amount}, finished=${finished}`);
+            console.log(`[INFO] Stored revenue update for book_id ${bookId}: amount=${amount}, finished=${finished}`);
           } else {
             console.log(`[WARN] No matching book_id found for revenue ID ${revenueId}, storing temporary data`);
             // book_idx와 revenue ID 매핑 저장
             if (bookIdx) {
-              const tmpData = { revenueId, bookIdx, amount, finished, timestamp: Date.now() };
-              requestMap.set(`tmp_revenue_${revenueId}`, tmpData);
+              requestMap.set(`revenueUpdate_${revenueId}`, {
+                revenueId,
+                bookIdx,
+                amount,
+                finished,
+                timestamp: Date.now()
+              });
             }
           }
         }
         
         requestMap.set(url, { url, method, payload, revenueId });
       }
+    }
+    
+    // GET /owner/booking/ - 예약 목록 조회
+    else if (url.includes('/owner/booking/') && method === 'GET') {
+      console.log(`[INFO] Detected GET /owner/booking/ - will process pending updates after response`);
+      // Response handler will take care of this
     }
 
     // Store all requests for reference
@@ -173,47 +190,6 @@ const extractBookingId = (url) => {
     console.error(`[ERROR] Failed to extract booking ID from URL: ${url}`);
     return null;
   }
-};
-
-const handleBookingUpdate = async (page, url, payload, accessToken, maps) => {
-  const { processedBookings, paymentAmounts, paymentStatus } = maps;
-  const bookingId = payload.externalId;
-  
-  console.log(`[INFO] Processing Booking_Update for book_id: ${bookingId}`);
-
-  // 중요: 항상 저장된 결제 정보 사용 - DOM에서 추출하지 않음
-  const storedAmount = paymentAmounts.get(bookingId) || 0;
-  const storedStatus = paymentStatus.get(bookingId) || false;
-  
-  console.log(`[INFO] Using stored payment info for book_id ${bookingId}: amount=${storedAmount}, finished=${storedStatus}`);
-  
-  console.log(`[INFO] Final payment status for book_id ${bookingId}: ${storedStatus}`);
-  console.log(`[INFO] Final payment amount for book_id ${bookingId}: ${storedAmount}`);
-
-  // Make sure we have a token
-  let currentToken = accessToken;
-  if (!currentToken) {
-    try {
-      currentToken = await getAccessToken();
-    } catch (error) {
-      console.error(`[ERROR] Failed to refresh token for Booking_Update: ${error.message}`);
-      return;
-    }
-  }
-
-  // Send the update to the API
-  await sendTo24GolfApi(
-    'Booking_Update', 
-    url, 
-    payload, 
-    null, 
-    currentToken, 
-    processedBookings, 
-    paymentAmounts, 
-    paymentStatus
-  );
-  
-  console.log(`[INFO] Processed Booking_Update for book_id ${bookingId}`);
 };
 
 module.exports = { setupRequestHandler };
