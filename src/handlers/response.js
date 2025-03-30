@@ -235,7 +235,6 @@ const processAppBookings = async (response, accessToken, maps, customerUpdates, 
               paymented: finished,
               paymentAmount: amount,
               crawlingSite: 'KimCaddie',
-              bookType: booking.book_type,
               immediate: booking.immediate_booked || false
             };
             
