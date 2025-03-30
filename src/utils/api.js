@@ -103,7 +103,7 @@ const sendTo24GolfApi = async (type, url, payload, response, accessToken, proces
 
   // Double-check payment info before sending
   if ((type === 'Booking_Create' || type === 'Booking_Update') && apiData) {
-    // Ensure we're using the latest payment info
+    // Ensure we're using the latest payment info from the maps
     const latestPaymentAmount = paymentAmounts.get(bookId);
     const latestPaymentStatus = paymentStatus.get(bookId);
     
