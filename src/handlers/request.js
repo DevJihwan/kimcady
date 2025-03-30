@@ -2,7 +2,7 @@ const { parseMultipartFormData } = require('../utils/parser');
 const { sendTo24GolfApi, getAccessToken } = require('../utils/api');
 
 const setupRequestHandler = (page, accessToken, maps) => {
-  const { requestMap, processedBookings, paymentAmounts, paymentStatus, bookIdToIdxMap, bookingDataMap } = maps;
+  const { requestMap, processedBookings, paymentAmounts, paymentStatus, bookIdToIdxMap, revenueToBookingMap, bookingDataMap } = maps;
 
   page.on('request', async (request) => {
     const url = request.url();
@@ -82,16 +82,59 @@ const setupRequestHandler = (page, accessToken, maps) => {
       requestMap.set(url, { url, method, payload, bookingId });
     }
 
-    // PATCH /owner/revenue/
+    // PATCH /owner/revenue/ - 결제 정보 업데이트
     else if (url.match(/\/owner\/revenue\/\d+\/$/) && method === 'PATCH') {
-      const revenueId = parseInt(url.split('/').slice(-2)[0], 10);
-      console.log(`[INFO] Detected PATCH /owner/revenue/${revenueId}/`);
-      requestMap.set(url, { url, method, payload, revenueId });
+      const revenueId = extractRevenueId(url);
+      if (revenueId) {
+        console.log(`[INFO] Detected PATCH /owner/revenue/${revenueId}/`);
+        
+        // 결제 정보 추출
+        if (payload && payload.amount !== undefined && payload.finished !== undefined) {
+          const amount = parseInt(payload.amount, 10) || 0;
+          const finished = payload.finished === 'true';
+          const bookIdx = payload.book_idx;
+          
+          console.log(`[DEBUG] Revenue update detected for revenue ID ${revenueId}, book_idx ${bookIdx}: amount=${amount}, finished=${finished}`);
+          
+          // revenue ID로 booking ID 찾기
+          const bookId = revenueToBookingMap.get(revenueId);
+          if (bookId) {
+            console.log(`[INFO] Found matching book_id ${bookId} for revenue ID ${revenueId}`);
+            
+            // 결제 정보 업데이트
+            paymentAmounts.set(bookId, amount);
+            paymentStatus.set(bookId, finished);
+            
+            console.log(`[INFO] Updated payment info for book_id ${bookId}: amount=${amount}, finished=${finished}`);
+          } else {
+            console.log(`[WARN] No matching book_id found for revenue ID ${revenueId}, storing temporary data`);
+            // book_idx와 revenue ID 매핑 저장
+            if (bookIdx) {
+              const tmpData = { revenueId, bookIdx, amount, finished, timestamp: Date.now() };
+              requestMap.set(`tmp_revenue_${revenueId}`, tmpData);
+            }
+          }
+        }
+        
+        requestMap.set(url, { url, method, payload, revenueId });
+      }
     }
 
     // Store all requests for reference
     requestMap.set(url, { url, method, payload });
   });
+};
+
+const extractRevenueId = (url) => {
+  try {
+    const match = url.match(/\/owner\/revenue\/(\d+)\//);
+    if (match && match[1]) {
+      return parseInt(match[1], 10);
+    }
+  } catch (err) {
+    console.error(`[ERROR] Failed to extract revenue ID from URL: ${url}`);
+  }
+  return null;
 };
 
 const parsePayload = (headers, postData) => {
@@ -156,39 +199,25 @@ const handleBookingUpdate = async (page, url, payload, accessToken, maps) => {
       }
     }
 
-    // DOM에서도 결제 정보를 추출 시도
-    try {
-      await page.waitForSelector('.sc-pktCe.dSKYub .sc-pAyMl.fkDqVf', { timeout: 5000 });
-      const paymentAmountText = await page.$eval('.sc-pktCe.dSKYub .sc-pAyMl.fkDqVf', el => el.textContent.trim());
-      const extractedAmount = parseInt(paymentAmountText.replace(/[^0-9]/g, ''), 10) || 0;
-      
-      if (extractedAmount > 0) {
-        paymentAmountFromDom = extractedAmount;
-        // 중요: DOM에서 금액을 추출했더라도 결제 상태를 자동으로 true로 변경하지 않음
-        // 상태는 이미 저장된 값을 유지하거나 기본값 사용
-        console.log(`[INFO] Extracted payment amount from DOM: ${paymentAmountFromDom}`);
-      }
-    } catch (domError) {
-      console.log(`[WARN] Could not extract payment info from DOM: ${domError.message}`);
-      // Try alternative selectors if needed
+    // DOM에서도 결제 정보를 추출 시도 (특수 상황에서만 사용)
+    if (paymentAmountFromDom <= 0) {
       try {
-        // Try a more general selector
-        await page.waitForSelector('[class*="sc-"][class*="pAyMl"]', { timeout: 3000 });
-        const elements = await page.$$('[class*="sc-"][class*="pAyMl"]');
-        for (const el of elements) {
-          const text = await page.evaluate(element => element.textContent, el);
-          if (text && /\d+/.test(text)) {
-            const extractedAmount = parseInt(text.replace(/[^0-9]/g, ''), 10) || 0;
-            if (extractedAmount > 0) {
-              paymentAmountFromDom = extractedAmount;
-              // 여기서도 상태는 자동으로 변경하지 않음
-              console.log(`[INFO] Found payment amount using alternative selector: ${paymentAmountFromDom}`);
-              break;
-            }
+        await page.waitForSelector('.sc-pktCe.dSKYub .sc-pAyMl.fkDqVf', { timeout: 5000 });
+        const paymentAmountText = await page.$eval('.sc-pktCe.dSKYub .sc-pAyMl.fkDqVf', el => el.textContent.trim());
+        const extractedAmount = parseInt(paymentAmountText.replace(/[^0-9]/g, ''), 10) || 0;
+        
+        if (extractedAmount > 0) {
+          paymentAmountFromDom = extractedAmount;
+          console.log(`[INFO] Extracted payment amount from DOM: ${paymentAmountFromDom}`);
+          
+          // 중요: DOM에서 상태를 가져올 순 없으니 기존 상태 유지
+          if (existingStatus !== undefined) {
+            paymentStatusFromDom = existingStatus;
           }
         }
-      } catch (altError) {
-        console.log(`[WARN] Alternative DOM extraction also failed: ${altError.message}`);
+      } catch (domError) {
+        console.log(`[WARN] Could not extract payment info from DOM: ${domError.message}`);
+        // 대안 시도는 생략
       }
     }
 
@@ -196,7 +225,7 @@ const handleBookingUpdate = async (page, url, payload, accessToken, maps) => {
     await new Promise(resolve => setTimeout(resolve, 3000));
     
     // 최종 결제 정보 결정
-    // 우선순위: DOM에서 추출(금액만) > 맵에 저장된 값 > 기본값
+    // 우선순위: 저장된 값 > DOM에서 추출(금액만) > 기본값
     if (paymentAmountFromDom <= 0) {
       paymentAmountFromDom = existingAmount || 0;
     }
