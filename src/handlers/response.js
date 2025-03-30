@@ -25,7 +25,41 @@ const setupResponseHandler = (page, accessToken, maps) => {
 
       // /owner/revenue/ POST 응답 처리 (Payment registration)
       else if (url.includes('/owner/revenue/') && method === 'POST' && status === 200) {
-        await handleRevenueResponse(response, request, maps);
+        const revenueData = await handleRevenueResponse(response, request, maps);
+        
+        // 결제 정보가 업데이트된 후 pending 상태의 예약 처리가 있으면 다시 시도
+        if (revenueData && revenueData.bookId) {
+          const pendingBooking = bookingDataMap.get(revenueData.bookId);
+          if (pendingBooking && pendingBooking.type === 'Booking_Create_Pending') {
+            console.log(`[INFO] Processing pending Booking_Create for book_id ${revenueData.bookId} after payment update`);
+            
+            // 토큰 확인 및 갱신
+            let currentToken = accessToken;
+            if (!currentToken) {
+              try {
+                currentToken = await getAccessToken();
+              } catch (err) {
+                console.error(`[ERROR] Failed to get token for pending Booking_Create: ${err.message}`);
+                return;
+              }
+            }
+            
+            // 결제 정보가 포함된 API 호출 실행
+            await sendTo24GolfApi(
+              'Booking_Create',
+              pendingBooking.url,
+              pendingBooking.payload,
+              pendingBooking.response,
+              currentToken,
+              processedBookings,
+              paymentAmounts,
+              paymentStatus
+            );
+            
+            console.log(`[INFO] Processed pending Booking_Create with payment info for book_id ${revenueData.bookId}`);
+            bookingDataMap.delete(revenueData.bookId);
+          }
+        }
       }
 
       // /owner/booking POST 응답 처리 (Booking_Create)
@@ -84,12 +118,12 @@ const handleRevenueResponse = async (response, request, maps) => {
       payload = parseMultipartFormData(request.postData());
     } catch (e) {
       console.error(`[ERROR] Failed to parse revenue request data: ${e.message}`);
-      return;
+      return null;
     }
     
     if (!payload || !payload.book_idx) {
       console.log(`[WARN] Missing book_idx in revenue payload:`, JSON.stringify(payload, null, 2));
-      return;
+      return null;
     }
 
     const bookIdx = payload.book_idx;
@@ -105,12 +139,15 @@ const handleRevenueResponse = async (response, request, maps) => {
       paymentAmounts.set(bookId, amount);
       paymentStatus.set(bookId, finished);
       console.log(`[INFO] Updated payment for book_id ${bookId} (book_idx ${bookIdx}): amount=${amount}, finished=${finished}`);
+      return { bookId, amount, finished };
     } else {
       console.log(`[WARN] No book_id found for book_idx ${bookIdx}`);
     }
   } catch (e) {
     console.error(`[ERROR] Failed to parse /owner/revenue/ response: ${e.message}`);
   }
+  
+  return null;
 };
 
 const handleBookingCreateResponse = async (url, response, requestMap, accessToken, maps) => {
@@ -152,34 +189,92 @@ const handleBookingCreateResponse = async (url, response, requestMap, accessToke
 
     console.log(`[INFO] Booking_Create stored for book_id ${bookId}, idx: ${responseData.idx}`);
 
-    // Check for a valid token
-    let currentToken = accessToken;
-    if (!currentToken) {
-      try {
-        currentToken = await getAccessToken();
-        console.log(`[INFO] Got new token for Booking_Create API call`);
-      } catch (tokenError) {
-        console.error(`[ERROR] Failed to get token for Booking_Create: ${tokenError.message}`);
-        return;
+    // 결제 정보 확인 (이미 결제 정보가 있는지)
+    const paymentAmount = paymentAmounts.get(bookId) || 0;
+    const isPaymentCompleted = paymentStatus.get(bookId) || false;
+    
+    // 결제 정보가 이미 있으면 바로 API 호출
+    if (paymentAmount > 0 && isPaymentCompleted) {
+      console.log(`[INFO] Payment information already available for book_id ${bookId}: amount=${paymentAmount}, completed=${isPaymentCompleted}`);
+      
+      // Check for a valid token
+      let currentToken = accessToken;
+      if (!currentToken) {
+        try {
+          currentToken = await getAccessToken();
+          console.log(`[INFO] Got new token for Booking_Create API call`);
+        } catch (tokenError) {
+          console.error(`[ERROR] Failed to get token for Booking_Create: ${tokenError.message}`);
+          return;
+        }
       }
-    }
 
-    // Send booking data to 24Golf API
-    await sendTo24GolfApi(
-      'Booking_Create',
-      url,
-      requestData.payload,
-      responseData,
-      currentToken,
-      processedBookings,
-      paymentAmounts,
-      paymentStatus
-    );
+      // Send booking data to 24Golf API
+      await sendTo24GolfApi(
+        'Booking_Create',
+        url,
+        requestData.payload,
+        responseData,
+        currentToken,
+        processedBookings,
+        paymentAmounts,
+        paymentStatus
+      );
+      
+      console.log(`[INFO] Processed Booking_Create for book_id ${bookId} with payment info`);
+      bookingDataMap.delete(bookId);
+    } else {
+      // 결제 정보가 없으면 Pending 상태로 저장하고 결제 정보 업데이트 기다림
+      console.log(`[INFO] Waiting for payment information for book_id ${bookId}`);
+      
+      // 예약 생성 요청을 Pending 상태로 저장
+      bookingDataMap.set(bookId, { 
+        type: 'Booking_Create_Pending', 
+        url,
+        payload: requestData.payload, 
+        response: responseData, 
+        timestamp: Date.now() 
+      });
+      
+      // 최대 10초 기다린 후 결제 정보 유무 확인하여 API 호출
+      setTimeout(async () => {
+        const pendingBooking = bookingDataMap.get(bookId);
+        if (pendingBooking && pendingBooking.type === 'Booking_Create_Pending') {
+          const currentPaymentAmount = paymentAmounts.get(bookId) || 0;
+          const currentPaymentStatus = paymentStatus.get(bookId) || false;
+          
+          console.log(`[INFO] After waiting, payment info for book_id ${bookId}: amount=${currentPaymentAmount}, completed=${currentPaymentStatus}`);
+          
+          // 토큰 확인 및 갱신
+          let currentToken = accessToken;
+          if (!currentToken) {
+            try {
+              currentToken = await getAccessToken();
+            } catch (err) {
+              console.error(`[ERROR] Failed to get token after waiting: ${err.message}`);
+              return;
+            }
+          }
+          
+          // 최종적으로 API 호출 실행 (결제 정보가 있든 없든)
+          await sendTo24GolfApi(
+            'Booking_Create',
+            url,
+            requestData.payload,
+            responseData,
+            currentToken,
+            processedBookings,
+            paymentAmounts,
+            paymentStatus
+          );
+          
+          console.log(`[INFO] Processed Booking_Create for book_id ${bookId} after waiting`);
+          bookingDataMap.delete(bookId);
+        }
+      }, 10000); // 10초 대기
+    }
     
-    console.log(`[INFO] Processed Booking_Create for book_id ${bookId}`);
-    
-    // Clean up after successful processing
-    bookingDataMap.delete(bookId);
+    // Clean up request map entry
     requestMap.delete(url);
   } catch (e) {
     console.error(`[ERROR] Failed to process Booking_Create: ${e.message}`);
