@@ -23,6 +23,30 @@ const setupResponseHandler = (page, accessToken, maps) => {
         await handleBookingListingResponse(response, maps);
       }
 
+      // /owner/revenue/ PATCH 응답 처리 (Payment update)
+      else if (url.includes('/owner/revenue/') && method === 'PATCH' && status === 200) {
+        const revenueId = extractRevenueId(url);
+        if (revenueId) {
+          console.log(`[DEBUG] Processing revenue update for revenue ID: ${revenueId}`);
+          const patchPayload = parseMultipartFormData(request.postData());
+          
+          // Store temporary revenue data for later use when booking data is received
+          if (patchPayload && patchPayload.book_idx && patchPayload.amount) {
+            const tmpData = {
+              revenueId,
+              bookIdx: patchPayload.book_idx,
+              amount: parseInt(patchPayload.amount, 10) || 0,
+              finished: patchPayload.finished === 'true',
+              timestamp: Date.now()
+            };
+            
+            // Store this data temporarily to use after we get booking data
+            console.log(`[DEBUG] Storing revenue update data for revenue ID ${revenueId}, bookIdx ${patchPayload.book_idx}: amount=${tmpData.amount}, finished=${tmpData.finished}`);
+            requestMap.set(`tmp_revenue_${revenueId}`, tmpData);
+          }
+        }
+      }
+
       // /owner/revenue/ POST 응답 처리 (Payment registration)
       else if (url.includes('/owner/revenue/') && method === 'POST' && status === 200) {
         const revenueData = await handleRevenueResponse(response, request, maps);
@@ -72,8 +96,20 @@ const setupResponseHandler = (page, accessToken, maps) => {
   });
 };
 
+const extractRevenueId = (url) => {
+  try {
+    const match = url.match(/\/owner\/revenue\/(\d+)\//);
+    if (match && match[1]) {
+      return parseInt(match[1], 10);
+    }
+  } catch (err) {
+    console.error(`[ERROR] Failed to extract revenue ID from URL: ${url}`);
+  }
+  return null;
+};
+
 const handleBookingListingResponse = async (response, maps) => {
-  const { paymentAmounts, paymentStatus, bookIdToIdxMap, revenueToBookingMap } = maps;
+  const { paymentAmounts, paymentStatus, bookIdToIdxMap, revenueToBookingMap, requestMap } = maps;
   
   try {
     const responseBody = await response.json();
@@ -84,24 +120,47 @@ const handleBookingListingResponse = async (response, maps) => {
       return;
     }
 
-    responseBody.results.forEach((booking) => {
+    // Process each booking in the response
+    for (const booking of responseBody.results) {
       if (!booking.book_id) {
-        console.log(`[WARN] Booking without book_id in response:`, JSON.stringify(booking, null, 2));
-        return;
+        console.log(`[WARN] Booking without book_id in response`);
+        continue;
       }
 
       const bookId = booking.book_id;
+      const bookIdx = booking.idx?.toString() || '';
       const revenueId = booking.revenue;
-      const amount = booking.revenue_detail?.amount || 0;
-      const finished = booking.revenue_detail?.finished || false;
+      
+      // Extract revenue detail information
+      const revenueDetail = booking.revenue_detail || {};
+      const amount = revenueDetail.amount || 0;
+      const finished = revenueDetail.finished || false;
 
+      // Store mappings
       revenueToBookingMap.set(revenueId, bookId);
-      paymentAmounts.set(bookId, amount);
-      paymentStatus.set(bookId, finished);
-      bookIdToIdxMap.set(bookId, booking.idx?.toString() || '');
+      bookIdToIdxMap.set(bookId, bookIdx);
+      
+      // Check if we have any pending revenue updates for this revenue ID
+      const tmpRevenueKey = `tmp_revenue_${revenueId}`;
+      const pendingRevenue = requestMap.get(tmpRevenueKey);
+      
+      if (pendingRevenue) {
+        console.log(`[INFO] Found pending revenue update for book_id ${bookId} (revenue ID ${revenueId}): amount=${pendingRevenue.amount}, finished=${pendingRevenue.finished}`);
+        
+        // Use the more recent data from the PATCH request
+        paymentAmounts.set(bookId, pendingRevenue.amount);
+        paymentStatus.set(bookId, pendingRevenue.finished);
+        
+        // Clean up temporary data
+        requestMap.delete(tmpRevenueKey);
+      } else {
+        // Use the data from the booking listing
+        paymentAmounts.set(bookId, amount);
+        paymentStatus.set(bookId, finished);
+      }
 
-      console.log(`[INFO] Mapped revenue ${revenueId} to book_id ${bookId}, amount: ${amount}, finished: ${finished}, idx: ${booking.idx}`);
-    });
+      console.log(`[INFO] Mapped revenue ${revenueId} to book_id ${bookId}, amount: ${paymentAmounts.get(bookId)}, finished: ${paymentStatus.get(bookId)}, idx: ${bookIdx}`);
+    }
   } catch (e) {
     console.error(`[ERROR] Failed to parse /owner/booking/ response: ${e.message}`);
   }
