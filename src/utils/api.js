@@ -45,14 +45,17 @@ const sendTo24GolfApi = async (type, url, payload, response, accessToken, proces
     return;
   }
 
-  const timestamp = new Date().toISOString();
-  console.log(`[${timestamp}] ${type} - URL: ${url} - Payload:`, JSON.stringify(payload, null, 2));
-
-  const headers = { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' };
+  // 결제 정보 로깅 및 확인
   const paymentAmount = paymentAmounts.get(bookId) || 0;
   const isPaymentCompleted = paymentStatus.get(bookId) || false;
+  
+  console.log(`[DEBUG] Payment info for ${bookId} - Amount: ${paymentAmount}, Completed: ${isPaymentCompleted}`);
 
+  const timestamp = new Date().toISOString();
+  console.log(`[${timestamp}] ${type} - URL: ${url} - Payload:`, JSON.stringify(payload, null, 2));
   console.log(`[DEBUG] API Data Prep - bookId: ${bookId}, paymentAmount: ${paymentAmount}, isPaymentCompleted: ${isPaymentCompleted}`);
+
+  const headers = { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' };
 
   let apiMethod, apiUrl, apiData;
   if (type === 'Booking_Create' && response) {
@@ -65,7 +68,7 @@ const sendTo24GolfApi = async (type, url, payload, response, accessToken, proces
       partySize: parseInt(response.person || payload?.person || 1, 10),
       startDate: response.start_datetime || `${payload?.book_date}T${payload?.book_time || '00:00:00'}+09:00`,
       endDate: response.end_datetime || calculateEndTime(response.start_datetime || `${payload?.book_date}T${payload?.book_time || '00:00:00'}+09:00`),
-      roomId: (response.room || payload?.room || 'unknown').toString(),
+      roomId: (response.room || payload?.room || payload?.room_id || 'unknown').toString(),
       paymented: isPaymentCompleted,
       paymentAmount,
       crawlingSite: 'KimCaddie',
@@ -96,6 +99,24 @@ const sendTo24GolfApi = async (type, url, payload, response, accessToken, proces
   } else {
     console.log(`[WARN] Unknown type: ${type}, skipping API call`);
     return;
+  }
+
+  // Double-check payment info before sending
+  if ((type === 'Booking_Create' || type === 'Booking_Update') && apiData) {
+    // Ensure we're using the latest payment info
+    const latestPaymentAmount = paymentAmounts.get(bookId);
+    const latestPaymentStatus = paymentStatus.get(bookId);
+    
+    if (latestPaymentAmount !== undefined) {
+      apiData.paymentAmount = latestPaymentAmount;
+    }
+    
+    if (latestPaymentStatus !== undefined) {
+      apiData.paymented = latestPaymentStatus;
+    }
+    
+    // Log final data being sent
+    console.log(`[DEBUG] Final payment values for ${bookId}: Amount=${apiData.paymentAmount}, Completed=${apiData.paymented}`);
   }
 
   console.log(`[DEBUG] ${type} API data:`, JSON.stringify(apiData, null, 2));
