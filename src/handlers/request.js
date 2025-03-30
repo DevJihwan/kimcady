@@ -148,11 +148,12 @@ const handleBookingUpdate = async (page, url, payload, accessToken, maps) => {
     if (existingAmount && existingAmount > 0) {
       console.log(`[INFO] Using existing payment amount for book_id ${bookingId}: ${existingAmount}`);
       paymentAmountFromDom = existingAmount;
-    }
-    
-    if (existingStatus) {
-      console.log(`[INFO] Using existing payment status for book_id ${bookingId}: ${existingStatus}`);
-      paymentStatusFromDom = existingStatus;
+      
+      // 중요: 금액이 있더라도 기존 상태를 그대로 유지
+      if (existingStatus !== undefined) {
+        paymentStatusFromDom = existingStatus;
+        console.log(`[INFO] Using existing payment status for book_id ${bookingId}: ${existingStatus}`);
+      }
     }
 
     // DOM에서도 결제 정보를 추출 시도
@@ -163,7 +164,8 @@ const handleBookingUpdate = async (page, url, payload, accessToken, maps) => {
       
       if (extractedAmount > 0) {
         paymentAmountFromDom = extractedAmount;
-        paymentStatusFromDom = true; // 금액이 있으면 결제 완료로 간주
+        // 중요: DOM에서 금액을 추출했더라도 결제 상태를 자동으로 true로 변경하지 않음
+        // 상태는 이미 저장된 값을 유지하거나 기본값 사용
         console.log(`[INFO] Extracted payment amount from DOM: ${paymentAmountFromDom}`);
       }
     } catch (domError) {
@@ -179,7 +181,7 @@ const handleBookingUpdate = async (page, url, payload, accessToken, maps) => {
             const extractedAmount = parseInt(text.replace(/[^0-9]/g, ''), 10) || 0;
             if (extractedAmount > 0) {
               paymentAmountFromDom = extractedAmount;
-              paymentStatusFromDom = true;
+              // 여기서도 상태는 자동으로 변경하지 않음
               console.log(`[INFO] Found payment amount using alternative selector: ${paymentAmountFromDom}`);
               break;
             }
@@ -194,13 +196,14 @@ const handleBookingUpdate = async (page, url, payload, accessToken, maps) => {
     await new Promise(resolve => setTimeout(resolve, 3000));
     
     // 최종 결제 정보 결정
-    // 우선순위: DOM에서 추출 > 맵에 저장된 값 > 기본값
+    // 우선순위: DOM에서 추출(금액만) > 맵에 저장된 값 > 기본값
     if (paymentAmountFromDom <= 0) {
       paymentAmountFromDom = existingAmount || 0;
     }
     
-    if (!paymentStatusFromDom) {
-      paymentStatusFromDom = existingStatus || false;
+    if (existingStatus !== undefined) {
+      // 이미 저장된 상태가 있으면 그대로 사용
+      paymentStatusFromDom = existingStatus;
     }
 
     console.log(`[INFO] Final payment status for book_id ${bookingId}: ${paymentStatusFromDom}`);
