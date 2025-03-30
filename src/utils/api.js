@@ -1,8 +1,9 @@
 const axios = require('axios');
-const { STORE_ID } = require('../config/env');
+const { getStoreId, API_BASE_URL } = require('../config/env');
 
 const getAccessToken = async () => {
-  const url = `https://api.dev.24golf.co.kr/auth/token/stores/${STORE_ID}/role/singleCrawler`;
+  const storeId = getStoreId();
+  const url = `${API_BASE_URL}/auth/token/stores/${storeId}/role/singleCrawler`;
   console.log(`[Token] Attempting to fetch access token from: ${url}`);
 
   try {
@@ -25,6 +26,52 @@ const getAccessToken = async () => {
       console.error('Response status:', error.response.status);
     }
     throw error;
+  }
+};
+
+// 매장 정보 조회 함수
+const getStoreInfo = async (storeId) => {
+  try {
+    console.log(`[Store] Fetching store information for ID: ${storeId}`);
+    const url = `${API_BASE_URL}/stores/${storeId}`;
+    
+    const response = await axios.get(url, {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 10000
+    });
+    
+    if (!response.data) {
+      throw new Error('Empty store data response received');
+    }
+    
+    console.log('[Store] Successfully retrieved store information:', JSON.stringify(response.data, null, 2));
+    return {
+      success: true,
+      data: response.data,
+      name: response.data.name || '알 수 없는 매장',
+      branch: response.data.branch || ''
+    };
+  } catch (error) {
+    console.error(`[Store Error] Failed to retrieve store information for ID ${storeId}:`, error.message);
+    if (error.response) {
+      console.error('Response data:', error.response.data);
+      console.error('Response status:', error.response.status);
+      
+      // 404 오류인 경우 매장이 존재하지 않음
+      if (error.response.status === 404) {
+        return {
+          success: false,
+          error: '존재하지 않는 매장 ID입니다.',
+          code: 'NOT_FOUND'
+        };
+      }
+    }
+    
+    return {
+      success: false,
+      error: `매장 정보 조회에 실패했습니다: ${error.message}`,
+      code: 'API_ERROR'
+    };
   }
 };
 
@@ -57,11 +104,12 @@ const sendTo24GolfApi = async (type, url, payload, response, accessToken, proces
   console.log(`[DEBUG] API Data Prep - bookId: ${bookId}, paymentAmount: ${paymentAmount}, isPaymentCompleted: ${isPaymentCompleted}`);
 
   const headers = { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' };
+  const storeId = getStoreId();
 
   let apiMethod, apiUrl, apiData;
   if (type === 'Booking_Create') {
     apiMethod = 'POST';
-    apiUrl = `https://api.dev.24golf.co.kr/stores/${STORE_ID}/reservation/crawl`;
+    apiUrl = `${API_BASE_URL}/stores/${storeId}/reservation/crawl`;
     
     // 앱 예약인 경우와 웹 예약인 경우 처리 분리
     if (response && (response.bookType === 'U' || response.immediate === true)) {
@@ -96,7 +144,7 @@ const sendTo24GolfApi = async (type, url, payload, response, accessToken, proces
     }
   } else if (type === 'Booking_Update') {
     apiMethod = 'PATCH';
-    apiUrl = `https://api.dev.24golf.co.kr/stores/${STORE_ID}/reservation/crawl`;
+    apiUrl = `${API_BASE_URL}/stores/${storeId}/reservation/crawl`;
     apiData = {
       externalId: bookId,
       name: payload.name || 'Unknown',
@@ -111,7 +159,7 @@ const sendTo24GolfApi = async (type, url, payload, response, accessToken, proces
     };
   } else if (type === 'Booking_Cancel') {
     apiMethod = 'DELETE';
-    apiUrl = `https://api.dev.24golf.co.kr/stores/${STORE_ID}/reservation/crawl`;
+    apiUrl = `${API_BASE_URL}/stores/${storeId}/reservation/crawl`;
     apiData = { 
       externalId: bookId, 
       crawlingSite: 'KimCaddie', 
@@ -198,4 +246,4 @@ const calculateEndTime = (startTime) => {
   }
 };
 
-module.exports = { getAccessToken, sendTo24GolfApi };
+module.exports = { getAccessToken, sendTo24GolfApi, getStoreInfo };
