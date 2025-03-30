@@ -79,6 +79,14 @@ const main = async () => {
       if (expiredCount > 0) {
         console.log(`[INFO] Cleaned up ${expiredCount} expired booking data entries`);
       }
+      
+      // 매일 자정에 processedBookings 초기화
+      const currentHour = new Date().getHours();
+      const currentMinute = new Date().getMinutes();
+      if (currentHour === 0 && currentMinute < 5) { // 자정~12:05 사이
+        console.log('[INFO] Daily cleanup: Clearing processed bookings sets');
+        maps.processedBookings.clear();
+      }
     }, 60000); // 1분마다 확인
 
     // 애플리케이션 종료 시 정리
