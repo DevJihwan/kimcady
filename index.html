@@ -68,6 +68,80 @@
     .card p {
       font-size: 14px;
       color: #586069;
+      margin-bottom: 12px;
+    }
+
+    /* 모달 스타일 */
+    .modal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-color: rgba(0, 0, 0, 0.5);
+      z-index: 100;
+      justify-content: center;
+      align-items: center;
+    }
+
+    .modal.active {
+      display: flex;
+    }
+
+    .modal-content {
+      background: white;
+      padding: 24px;
+      border-radius: 6px;
+      max-width: 500px;
+      width: 90%;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    }
+
+    .modal-header {
+      margin-bottom: 16px;
+    }
+
+    .modal-header h2 {
+      font-size: 18px;
+      font-weight: 600;
+    }
+
+    .modal-body {
+      margin-bottom: 24px;
+    }
+
+    .modal-footer {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    /* 폼 요소 스타일 */
+    .form-group {
+      margin-bottom: 16px;
+    }
+
+    .form-group label {
+      display: block;
+      margin-bottom: 4px;
+      font-weight: 500;
+      font-size: 14px;
+    }
+
+    .form-control {
+      width: 100%;
+      padding: 8px 12px;
+      font-size: 14px;
+      border: 1px solid #e1e4e8;
+      border-radius: 4px;
+      transition: border-color 0.2s ease;
+    }
+
+    .form-control:focus {
+      outline: none;
+      border-color: #0366d6;
+      box-shadow: 0 0 0 3px rgba(3, 102, 214, 0.3);
     }
 
     /* 로그 영역 */
@@ -107,6 +181,35 @@
       border-color: #2c974b;
     }
 
+    .btn-secondary {
+      color: #24292e;
+      background-color: #fafbfc;
+      border-color: #1b1f2326;
+    }
+
+    .btn-secondary:hover {
+      background-color: #f3f4f6;
+      border-color: #1b1f2326;
+    }
+
+    .store-info {
+      margin-top: 12px;
+      padding: 12px;
+      background-color: #f0f8ff;
+      border-radius: 4px;
+      border: 1px solid #cce5ff;
+    }
+
+    .store-info h3 {
+      font-size: 16px;
+      margin-bottom: 4px;
+    }
+
+    .store-info p {
+      margin: 0;
+      font-size: 14px;
+    }
+
     /* 반응형 디자인 */
     @media (max-width: 600px) {
       .container {
@@ -128,13 +231,23 @@
     <!-- 헤더 -->
     <div class="header">
       <h1>KimCaddie</h1>
-      <span class="status">상태: 수집 중...</span>
+      <span class="status" id="status">상태: 수집 중...</span>
     </div>
 
     <!-- 정보 카드 -->
     <div class="card">
       <p>KimCaddie 예약 데이터를 수집 중입니다.</p>
       <p>Chrome 창에서 로그인 및 예약 관리를 진행해주세요.</p>
+      
+      <div class="store-info" id="storeInfo">
+        <h3>현재 매장 정보</h3>
+        <p id="storeName">매장명: 로딩 중...</p>
+        <p id="storeBranch"></p>
+      </div>
+      
+      <div style="margin-top: 16px; text-align: right;">
+        <button class="btn btn-secondary" onclick="openSettingsModal()">매장 설정</button>
+      </div>
     </div>
 
     <!-- 로그 섹션 -->
@@ -148,7 +261,129 @@
     </div>
   </div>
 
+  <!-- 매장 설정 모달 -->
+  <div class="modal" id="settingsModal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>매장 설정</h2>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label for="storeId">매장 ID</label>
+          <input type="text" class="form-control" id="storeId" placeholder="매장 ID를 입력하세요">
+        </div>
+        <p id="validationMessage" style="color: #d73a49; font-size: 14px; display: none;"></p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeSettingsModal()">취소</button>
+        <button class="btn" onclick="saveStoreId()">저장</button>
+      </div>
+    </div>
+  </div>
+
   <script>
+    // Electron IPC (프로세스 간 통신) 설정
+    const { ipcRenderer } = require('electron');
+    
+    // DOM 로드 완료 시 초기화
+    document.addEventListener('DOMContentLoaded', () => {
+      loadStoreInfo();
+    });
+    
+    // 매장 정보 로드
+    function loadStoreInfo() {
+      ipcRenderer.send('get-store-info');
+      
+      // 매장 정보 응답 처리
+      ipcRenderer.on('store-info-response', (event, data) => {
+        const storeNameEl = document.getElementById('storeName');
+        const storeBranchEl = document.getElementById('storeBranch');
+        
+        if (data.success) {
+          storeNameEl.textContent = `매장명: ${data.name || ''}`;
+          if (data.branch) {
+            storeBranchEl.textContent = `지점: ${data.branch}`;
+            storeBranchEl.style.display = 'block';
+          } else {
+            storeBranchEl.style.display = 'none';
+          }
+        } else {
+          storeNameEl.textContent = '매장 정보를 불러올 수 없습니다';
+          storeBranchEl.style.display = 'none';
+        }
+      });
+    }
+    
+    // 매장 설정 모달 열기
+    function openSettingsModal() {
+      // 현재 매장 ID 가져오기
+      ipcRenderer.send('get-current-store-id');
+      
+      // 현재 매장 ID 응답 처리
+      ipcRenderer.once('current-store-id', (event, storeId) => {
+        document.getElementById('storeId').value = storeId || '';
+        document.getElementById('validationMessage').style.display = 'none';
+        document.getElementById('settingsModal').classList.add('active');
+      });
+    }
+    
+    // 매장 설정 모달 닫기
+    function closeSettingsModal() {
+      document.getElementById('settingsModal').classList.remove('active');
+    }
+    
+    // 매장 ID 저장
+    function saveStoreId() {
+      const storeId = document.getElementById('storeId').value.trim();
+      const validationMessageEl = document.getElementById('validationMessage');
+      
+      // 기본 유효성 검사
+      if (!storeId) {
+        validationMessageEl.textContent = '매장 ID를 입력해주세요.';
+        validationMessageEl.style.display = 'block';
+        return;
+      }
+      
+      // 매장 ID 검증 요청
+      ipcRenderer.send('validate-store-id', storeId);
+      
+      // 검증 결과 처리
+      ipcRenderer.once('validate-store-id-response', (event, result) => {
+        if (result.success) {
+          // 매장 ID 저장 요청
+          ipcRenderer.send('save-store-id', storeId);
+          
+          // 저장 결과 처리
+          ipcRenderer.once('save-store-id-response', (event, saveResult) => {
+            if (saveResult.success) {
+              // 모달 닫기
+              closeSettingsModal();
+              
+              // 매장 정보 다시 로드
+              loadStoreInfo();
+              
+              // 재시작 확인
+              const confirmed = window.confirm(
+                `매장 정보가 변경되었습니다: ${result.name}${result.branch ? ` (${result.branch})` : ''}\n\n` + 
+                '변경사항을 적용하려면 애플리케이션을 재시작해야 합니다.\n\n' +
+                '지금 재시작하시겠습니까?'
+              );
+              
+              if (confirmed) {
+                ipcRenderer.send('restart-app');
+              }
+            } else {
+              validationMessageEl.textContent = '매장 ID 저장에 실패했습니다.';
+              validationMessageEl.style.display = 'block';
+            }
+          });
+        } else {
+          validationMessageEl.textContent = result.error || '유효하지 않은 매장 ID입니다.';
+          validationMessageEl.style.display = 'block';
+        }
+      });
+    }
+    
     // 로그 추가 함수
     function addLog(message) {
       const logSection = document.getElementById('log');
@@ -178,6 +413,11 @@
         addLog(`[ERROR] ${message}`);
       };
     })();
+    
+    // 앱 상태 업데이트를 위한 리스너
+    ipcRenderer.on('app-status', (event, statusText) => {
+      document.getElementById('status').textContent = `상태: ${statusText}`;
+    });
   </script>
 </body>
 </html>
