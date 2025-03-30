@@ -39,7 +39,7 @@ const setupRequestHandler = (page, accessToken, maps) => {
       payload.externalId = bookingId;
       console.log(`[DEBUG] Booking change detected - URL: ${url}, BookingId: ${bookingId}, Payload:`, JSON.stringify(payload, null, 2));
 
-      // 이미 결제 정보가 있는지 확인 및 로깅
+      // 이미 결제 정보가 있는지 확인 및 로깅 (항상 저장된 값 사용)
       const existingPaymentAmount = paymentAmounts.get(bookingId) || 0;
       const existingPaymentStatus = paymentStatus.get(bookingId) || false;
       console.log(`[DEBUG] Existing payment info for ${bookingId}: Amount=${existingPaymentAmount}, Completed=${existingPaymentStatus}`);
@@ -178,75 +178,17 @@ const extractBookingId = (url) => {
 const handleBookingUpdate = async (page, url, payload, accessToken, maps) => {
   const { processedBookings, paymentAmounts, paymentStatus } = maps;
   const bookingId = payload.externalId;
-  let paymentAmountFromDom = 0;
-  let paymentStatusFromDom = false;
-
+  
   console.log(`[INFO] Processing Booking_Update for book_id: ${bookingId}`);
 
-  try {
-    // 이미 저장된 결제 정보가 있는지 먼저 확인
-    const existingAmount = paymentAmounts.get(bookingId);
-    const existingStatus = paymentStatus.get(bookingId);
-    
-    if (existingAmount && existingAmount > 0) {
-      console.log(`[INFO] Using existing payment amount for book_id ${bookingId}: ${existingAmount}`);
-      paymentAmountFromDom = existingAmount;
-      
-      // 중요: 금액이 있더라도 기존 상태를 그대로 유지
-      if (existingStatus !== undefined) {
-        paymentStatusFromDom = existingStatus;
-        console.log(`[INFO] Using existing payment status for book_id ${bookingId}: ${existingStatus}`);
-      }
-    }
-
-    // DOM에서도 결제 정보를 추출 시도 (특수 상황에서만 사용)
-    if (paymentAmountFromDom <= 0) {
-      try {
-        await page.waitForSelector('.sc-pktCe.dSKYub .sc-pAyMl.fkDqVf', { timeout: 5000 });
-        const paymentAmountText = await page.$eval('.sc-pktCe.dSKYub .sc-pAyMl.fkDqVf', el => el.textContent.trim());
-        const extractedAmount = parseInt(paymentAmountText.replace(/[^0-9]/g, ''), 10) || 0;
-        
-        if (extractedAmount > 0) {
-          paymentAmountFromDom = extractedAmount;
-          console.log(`[INFO] Extracted payment amount from DOM: ${paymentAmountFromDom}`);
-          
-          // 중요: DOM에서 상태를 가져올 순 없으니 기존 상태 유지
-          if (existingStatus !== undefined) {
-            paymentStatusFromDom = existingStatus;
-          }
-        }
-      } catch (domError) {
-        console.log(`[WARN] Could not extract payment info from DOM: ${domError.message}`);
-        // 대안 시도는 생략
-      }
-    }
-
-    // Wait a bit to ensure we have all data
-    await new Promise(resolve => setTimeout(resolve, 3000));
-    
-    // 최종 결제 정보 결정
-    // 우선순위: 저장된 값 > DOM에서 추출(금액만) > 기본값
-    if (paymentAmountFromDom <= 0) {
-      paymentAmountFromDom = existingAmount || 0;
-    }
-    
-    if (existingStatus !== undefined) {
-      // 이미 저장된 상태가 있으면 그대로 사용
-      paymentStatusFromDom = existingStatus;
-    }
-
-    console.log(`[INFO] Final payment status for book_id ${bookingId}: ${paymentStatusFromDom}`);
-    console.log(`[INFO] Final payment amount for book_id ${bookingId}: ${paymentAmountFromDom}`);
-    
-    // 맵 업데이트
-    paymentAmounts.set(bookingId, paymentAmountFromDom);
-    paymentStatus.set(bookingId, paymentStatusFromDom);
-  } catch (e) {
-    console.error(`[ERROR] Failed to process payment info: ${e.message}`);
-    // 에러 발생 시 맵에 저장된 값 사용
-    paymentAmountFromDom = paymentAmounts.get(bookingId) || 0;
-    paymentStatusFromDom = paymentStatus.get(bookingId) || false;
-  }
+  // 중요: 항상 저장된 결제 정보 사용 - DOM에서 추출하지 않음
+  const storedAmount = paymentAmounts.get(bookingId) || 0;
+  const storedStatus = paymentStatus.get(bookingId) || false;
+  
+  console.log(`[INFO] Using stored payment info for book_id ${bookingId}: amount=${storedAmount}, finished=${storedStatus}`);
+  
+  console.log(`[INFO] Final payment status for book_id ${bookingId}: ${storedStatus}`);
+  console.log(`[INFO] Final payment amount for book_id ${bookingId}: ${storedAmount}`);
 
   // Make sure we have a token
   let currentToken = accessToken;
