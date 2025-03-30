@@ -21,6 +21,8 @@ const setupResponseHandler = (page, accessToken, maps) => {
       // /owner/booking/ GET 응답 처리 (Getting existing bookings and payment info)
       if (url.includes('/owner/booking/') && method === 'GET' && status === 200) {
         await handleBookingListingResponse(response, maps);
+        // After processing booking listing, we need to process any pending booking updates
+        await processPendingBookingUpdates(accessToken, maps);
       }
 
       // /owner/revenue/ PATCH 응답 처리 (Payment update)
@@ -50,7 +52,7 @@ const setupResponseHandler = (page, accessToken, maps) => {
             } else {
               // Store this data temporarily to use after we get booking data
               console.log(`[DEBUG] Storing revenue update data for revenue ID ${revenueId}, bookIdx ${patchPayload.book_idx}: amount=${tmpData.amount}, finished=${tmpData.finished}`);
-              requestMap.set(`tmp_revenue_${revenueId}`, tmpData);
+              requestMap.set(`revenueUpdate_${revenueId}`, tmpData);
             }
           }
         }
@@ -62,35 +64,10 @@ const setupResponseHandler = (page, accessToken, maps) => {
         
         // 결제 정보가 업데이트된 후 pending 상태의 예약 처리가 있으면 다시 시도
         if (revenueData && revenueData.bookId) {
-          const pendingBooking = bookingDataMap.get(revenueData.bookId);
-          if (pendingBooking && pendingBooking.type === 'Booking_Create_Pending') {
-            console.log(`[INFO] Processing pending Booking_Create for book_id ${revenueData.bookId} after payment update`);
-            
-            // 토큰 확인 및 갱신
-            let currentToken = accessToken;
-            if (!currentToken) {
-              try {
-                currentToken = await getAccessToken();
-              } catch (err) {
-                console.error(`[ERROR] Failed to get token for pending Booking_Create: ${err.message}`);
-                return;
-              }
-            }
-            
-            // 결제 정보가 포함된 API 호출 실행
-            await sendTo24GolfApi(
-              'Booking_Create',
-              pendingBooking.url,
-              pendingBooking.payload,
-              pendingBooking.response,
-              currentToken,
-              processedBookings,
-              paymentAmounts,
-              paymentStatus
-            );
-            
-            console.log(`[INFO] Processed pending Booking_Create with payment info for book_id ${revenueData.bookId}`);
-            bookingDataMap.delete(revenueData.bookId);
+          const pendingBooking = bookingDataMap.get(`pendingUpdate_${revenueData.bookId}`);
+          if (pendingBooking && pendingBooking.type === 'Booking_Update_Pending') {
+            console.log(`[INFO] Processing pending Booking_Update for book_id ${revenueData.bookId} after payment update`);
+            await processBookingUpdate(pendingBooking.url, pendingBooking.payload, accessToken, maps);
           }
         }
       }
@@ -103,6 +80,85 @@ const setupResponseHandler = (page, accessToken, maps) => {
       console.error(`[ERROR] Error handling response for ${url}: ${error.message}`);
     }
   });
+};
+
+// 보류 중인 모든 예약 업데이트 처리
+const processPendingBookingUpdates = async (accessToken, maps) => {
+  const { bookingDataMap, requestMap } = maps;
+  
+  console.log('[INFO] Processing any pending booking updates after getting booking data');
+  
+  // Find all pending booking updates
+  for (const [key, data] of bookingDataMap.entries()) {
+    if (key.startsWith('pendingUpdate_') && data.type === 'Booking_Update_Pending') {
+      const bookId = key.replace('pendingUpdate_', '');
+      console.log(`[INFO] Found pending update for book_id ${bookId}`);
+      
+      // Check if we have recent revenue updates for this book
+      let revenueUpdated = false;
+      for (const [revKey, revData] of requestMap.entries()) {
+        if (revKey.startsWith('revenueUpdate_') && revData.bookId === bookId && 
+            (Date.now() - revData.timestamp) < 60000) { // Only consider recent updates (last minute)
+          revenueUpdated = true;
+          break;
+        }
+      }
+      
+      // Process the booking update
+      try {
+        console.log(`[INFO] Processing pending booking update for book_id ${bookId}${revenueUpdated ? ' with updated revenue data' : ''}`);
+        await processBookingUpdate(data.url, data.payload, accessToken, maps);
+        // Remove from pending list
+        bookingDataMap.delete(key);
+      } catch (error) {
+        console.error(`[ERROR] Failed to process pending booking update for ${bookId}: ${error.message}`);
+      }
+    }
+  }
+};
+
+// Process a single booking update
+const processBookingUpdate = async (url, payload, accessToken, maps) => {
+  const { processedBookings, paymentAmounts, paymentStatus } = maps;
+  const bookingId = payload.externalId;
+  
+  if (!bookingId) {
+    console.error('[ERROR] Missing booking ID in payload');
+    return;
+  }
+  
+  console.log(`[INFO] Processing Booking_Update for book_id: ${bookingId}`);
+  
+  // 항상 맵에서 최신 결제 정보 사용
+  const currentAmount = paymentAmounts.get(bookingId) || 0;
+  const currentStatus = paymentStatus.get(bookingId) || false;
+  
+  console.log(`[INFO] Final payment values for book_id ${bookingId}: amount=${currentAmount}, finished=${currentStatus}`);
+  
+  // Make sure we have a token
+  let currentToken = accessToken;
+  if (!currentToken) {
+    try {
+      currentToken = await getAccessToken();
+    } catch (error) {
+      console.error(`[ERROR] Failed to refresh token for Booking_Update: ${error.message}`);
+      return;
+    }
+  }
+  
+  // Send the update to the API
+  await sendTo24GolfApi(
+    'Booking_Update', 
+    url, 
+    payload, 
+    null, 
+    currentToken, 
+    processedBookings, 
+    paymentAmounts, 
+    paymentStatus
+  );
+  
+  console.log(`[INFO] Processed Booking_Update for book_id ${bookingId}`);
 };
 
 // book ID 찾기 (revenue ID 또는 book_idx로)
@@ -172,7 +228,7 @@ const handleBookingListingResponse = async (response, maps) => {
       bookIdToIdxMap.set(bookId, bookIdx);
       
       // Check if we have any pending revenue updates for this revenue ID
-      const tmpRevenueKey = `tmp_revenue_${revenueId}`;
+      const tmpRevenueKey = `revenueUpdate_${revenueId}`;
       const pendingRevenue = requestMap.get(tmpRevenueKey);
       
       if (pendingRevenue) {
