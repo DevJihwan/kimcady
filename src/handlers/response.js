@@ -6,6 +6,7 @@ const setupResponseHandler = (page, accessToken, maps) => {
   
   // 새로운 맵 추가 - 앱 예약 처리용
   const customerUpdates = new Map(); // 최근 고객 정보 업데이트 저장
+  const processedAppBookings = new Set(); // 처리된 앱 예약 ID 저장
 
   page.on('response', async (response) => {
     const url = response.url();
@@ -31,7 +32,7 @@ const setupResponseHandler = (page, accessToken, maps) => {
         await handleBookingListingResponse(response, maps);
         
         // 앱 예약 처리 시도 (최근 업데이트된 고객 정보 기반)
-        await processAppBookings(response, accessToken, maps, customerUpdates);
+        await processAppBookings(response, accessToken, maps, customerUpdates, processedAppBookings);
         
         // After processing booking listing, we need to process any pending booking updates
         await processPendingBookingUpdates(accessToken, maps);
@@ -140,7 +141,7 @@ const handleCustomerResponse = async (response, customerUpdates) => {
 };
 
 // 앱 예약 처리 (예약 목록 조회 후)
-const processAppBookings = async (response, accessToken, maps, customerUpdates) => {
+const processAppBookings = async (response, accessToken, maps, customerUpdates, processedAppBookings) => {
   const { processedBookings, paymentAmounts, paymentStatus } = maps;
   
   try {
@@ -154,7 +155,7 @@ const processAppBookings = async (response, accessToken, maps, customerUpdates) 
     
     // 최근 고객 업데이트와 매칭되는 예약 찾기
     for (const booking of bookingData.results) {
-      if (!booking.book_id || !booking.customer || processedBookings.has(booking.book_id)) {
+      if (!booking.book_id || !booking.customer) {
         continue;
       }
       
@@ -162,15 +163,22 @@ const processAppBookings = async (response, accessToken, maps, customerUpdates) 
       const customerId = booking.customer;
       const customerUpdate = customerUpdates.get(customerId);
       
+      // 이미 처리된 예약은 건너뜀
+      if (processedBookings.has(bookId) || processedAppBookings.has(bookId)) {
+        continue;
+      }
+      
       // 앱 예약만 찾기 (book_type이 'U'이고 customer 필드가 있는 경우)
       const isAppBooking = booking.book_type === 'U' || booking.confirmed_by === 'IM' || booking.immediate_booked === true;
       
       if (isAppBooking) {
         // 최근 고객 업데이트가 있거나, 일반 앱 예약인 경우
         const isRecentUpdate = customerUpdate && (Date.now() - customerUpdate.timestamp < 60 * 1000); // 1분 이내
+        const isCanceled = booking.state === 'canceled';
         
-        if (isRecentUpdate || booking.immediate_booked === true) {
-          console.log(`[INFO] Detected ${booking.immediate_booked ? 'immediate' : 'regular'} app booking: bookId=${bookId}, customerId=${customerId}`);
+        // 새 예약 또는 취소된 예약 처리
+        if (isRecentUpdate || booking.immediate_booked === true || isCanceled) {
+          console.log(`[INFO] Detected ${isCanceled ? 'canceled' : (booking.immediate_booked ? 'immediate' : 'regular')} app booking: bookId=${bookId}, customerId=${customerId}, state=${booking.state}`);
           
           // 결제 정보 가져오기
           const revenueDetail = booking.revenue_detail || {};
@@ -181,47 +189,81 @@ const processAppBookings = async (response, accessToken, maps, customerUpdates) 
           paymentAmounts.set(bookId, amount);
           paymentStatus.set(bookId, finished);
           
-          // 예약 생성 API 호출
-          const bookingData = {
-            externalId: bookId,
-            name: booking.name || 'Unknown',
-            phone: booking.phone || '010-0000-0000',
-            partySize: parseInt(booking.person || 1, 10),
-            startDate: booking.start_datetime,
-            endDate: booking.end_datetime,
-            roomId: booking.room?.toString() || 'unknown',
-            hole: booking.hole,
-            paymented: finished,
-            paymentAmount: amount,
-            crawlingSite: 'KimCaddie',
-            bookType: booking.book_type,
-            immediate: booking.immediate_booked || false
-          };
-          
-          try {
-            // Make sure we have a valid token
-            let currentToken = accessToken;
-            if (!currentToken) {
-              currentToken = await getAccessToken();
+          if (isCanceled) {
+            // 취소된 예약 처리
+            try {
+              // Make sure we have a valid token
+              let currentToken = accessToken;
+              if (!currentToken) {
+                currentToken = await getAccessToken();
+              }
+              
+              console.log(`[INFO] Processing App Booking_Cancel for book_id: ${bookId}`);
+              
+              const cancelPayload = {
+                canceled_by: 'App User',
+                externalId: bookId
+              };
+              
+              await sendTo24GolfApi(
+                'Booking_Cancel', 
+                '', 
+                cancelPayload, 
+                null, 
+                currentToken, 
+                processedBookings, 
+                paymentAmounts, 
+                paymentStatus
+              );
+              
+              console.log(`[INFO] Processed App Booking_Cancel for book_id: ${bookId}`);
+              processedAppBookings.add(bookId);
+            } catch (error) {
+              console.error(`[ERROR] Failed to process App Booking_Cancel: ${error.message}`);
             }
+          } else {
+            // 새 예약 처리
+            const bookingData = {
+              externalId: bookId,
+              name: booking.name || 'Unknown',
+              phone: booking.phone || '010-0000-0000',
+              partySize: parseInt(booking.person || 1, 10),
+              startDate: booking.start_datetime,
+              endDate: booking.end_datetime,
+              roomId: booking.room?.toString() || 'unknown',
+              hole: booking.hole,
+              paymented: finished,
+              paymentAmount: amount,
+              crawlingSite: 'KimCaddie',
+              bookType: booking.book_type,
+              immediate: booking.immediate_booked || false
+            };
             
-            console.log(`[INFO] Processing App Booking_Create for book_id: ${bookId}`);
-            
-            await sendTo24GolfApi(
-              'Booking_Create', 
-              '', 
-              {}, 
-              bookingData, 
-              currentToken, 
-              processedBookings, 
-              paymentAmounts, 
-              paymentStatus
-            );
-            
-            console.log(`[INFO] Processed App Booking_Create for book_id: ${bookId}`);
-            processedBookings.add(bookId); // 중복 처리 방지
-          } catch (error) {
-            console.error(`[ERROR] Failed to process App Booking_Create: ${error.message}`);
+            try {
+              // Make sure we have a valid token
+              let currentToken = accessToken;
+              if (!currentToken) {
+                currentToken = await getAccessToken();
+              }
+              
+              console.log(`[INFO] Processing App Booking_Create for book_id: ${bookId}`);
+              
+              await sendTo24GolfApi(
+                'Booking_Create', 
+                '', 
+                {}, 
+                bookingData, 
+                currentToken, 
+                processedBookings, 
+                paymentAmounts, 
+                paymentStatus
+              );
+              
+              console.log(`[INFO] Processed App Booking_Create for book_id: ${bookId}`);
+              processedAppBookings.add(bookId);
+            } catch (error) {
+              console.error(`[ERROR] Failed to process App Booking_Create: ${error.message}`);
+            }
           }
         }
       }
@@ -233,6 +275,12 @@ const processAppBookings = async (response, accessToken, maps, customerUpdates) 
       if (data.timestamp < fiveMinutesAgo) {
         customerUpdates.delete(customerId);
       }
+    }
+    
+    // 오래된 처리 정보 정리 (하루에 한 번)
+    if (processedAppBookings.size > 1000) {
+      console.log(`[INFO] Clearing old processed app bookings (size=${processedAppBookings.size})`);
+      processedAppBookings.clear();
     }
   } catch (e) {
     console.error(`[ERROR] Failed to process app bookings: ${e.message}`);
