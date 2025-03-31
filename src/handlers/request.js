@@ -32,54 +32,76 @@ const setupRequestHandler = (page, accessToken, maps) => {
       if (payload.state === 'canceled' && payload.book_id) {
         const bookId = payload.book_id;
         
-        // 이미 처리된 취소인지 확인
-        if (processedAppCancellations.has(bookId) || processedBookings.has(bookId)) {
-          console.log(`[INFO] Skipping already processed app cancellation for book_id: ${bookId}`);
-          return;
-        }
+        // 이미 처리된 취소인지 확인 - 가능한 자세한 로깅 추가
+        console.log(`[DEBUG] Checking cancellation state for book_id: ${bookId}`);
+        console.log(`[DEBUG] - In processedAppCancellations: ${processedAppCancellations.has(bookId)}`);
+        console.log(`[DEBUG] - In processedBookings: ${processedBookings.has(bookId)}`);
         
-        console.log(`[INFO] App Booking_Cancel detected for book_id: ${bookId}`);
-        try {
-          // 유효한 토큰 확보
-          let currentToken = accessToken;
-          if (!currentToken) {
-            currentToken = await getAccessToken();
-          }
+        // 처리 내역 확인 및 중복 체크 개선
+        // 24시간 이내에 처리된 경우에만 중복으로 간주
+        const recentlyProcessed = (processedAppCancellations.has(bookId) || processedBookings.has(bookId));
+        
+        if (recentlyProcessed) {
+          console.log(`[INFO] Skipping already processed app cancellation for book_id: ${bookId}`);
           
-          // 취소 사유 추출 (있을 경우)
-          let cancelReason = 'App User';
-          if (payload.bookingInfo) {
-            try {
-              const bookingInfo = JSON.parse(payload.bookingInfo);
-              if (bookingInfo.cancel_reason) {
-                cancelReason = bookingInfo.cancel_reason;
-              }
-            } catch (e) {
-              console.error(`[ERROR] Failed to parse bookingInfo: ${e.message}`);
+          // 중요: 확인을 위해 취소 요청을 저장해두고 로그만 출력
+          requestMap.set(`skipCancellation_${bookId}`, {
+            bookId,
+            timestamp: Date.now(),
+            reason: 'Already processed'
+          });
+        } else {
+          console.log(`[INFO] App Booking_Cancel detected for book_id: ${bookId}`);
+          try {
+            // 유효한 토큰 확보
+            let currentToken = accessToken;
+            if (!currentToken) {
+              currentToken = await getAccessToken();
             }
+            
+            // 취소 사유 추출 (있을 경우)
+            let cancelReason = 'App User';
+            if (payload.bookingInfo) {
+              try {
+                const bookingInfo = JSON.parse(payload.bookingInfo);
+                if (bookingInfo.cancel_reason) {
+                  cancelReason = bookingInfo.cancel_reason;
+                }
+              } catch (e) {
+                console.error(`[ERROR] Failed to parse bookingInfo: ${e.message}`);
+              }
+            }
+            
+            // 취소 API 호출
+            const cancelPayload = {
+              externalId: bookId,
+              canceled_by: cancelReason
+            };
+            
+            console.log(`[INFO] Calling 24Golf API for cancellation of book_id: ${bookId}`);
+            const result = await sendTo24GolfApi(
+              'Booking_Cancel', 
+              url, 
+              cancelPayload, 
+              null, 
+              currentToken, 
+              processedBookings, 
+              paymentAmounts, 
+              paymentStatus
+            );
+            
+            console.log(`[INFO] Processed App Booking_Cancel for book_id: ${bookId}, Result:`, JSON.stringify(result || {}, null, 2));
+            
+            // 성공적으로 처리된 경우에만 세트에 추가
+            processedAppCancellations.add(bookId);
+            processedBookings.add(bookId);
+          } catch (error) {
+            console.error(`[ERROR] Failed to process App Booking_Cancel: ${error.message}`);
+            
+            // 오류 발생 시 재시도를 위해 처리 목록에서 제외
+            processedAppCancellations.delete(bookId);
+            processedBookings.delete(bookId);
           }
-          
-          // 취소 API 호출
-          const cancelPayload = {
-            externalId: bookId,
-            canceled_by: cancelReason
-          };
-          
-          await sendTo24GolfApi(
-            'Booking_Cancel', 
-            url, 
-            cancelPayload, 
-            null, 
-            currentToken, 
-            processedBookings, 
-            paymentAmounts, 
-            paymentStatus
-          );
-          
-          console.log(`[INFO] Processed App Booking_Cancel for book_id: ${bookId}`);
-          processedAppCancellations.add(bookId);
-        } catch (error) {
-          console.error(`[ERROR] Failed to process App Booking_Cancel: ${error.message}`);
         }
       }
       
@@ -220,6 +242,17 @@ const setupRequestHandler = (page, accessToken, maps) => {
   // 페이지 종료 시 정리
   page.once('close', () => {
     clearInterval(cleanupInterval);
+  });
+
+  // 1시간마다 전체 취소 처리 세트 초기화 (자주 초기화하여 오래된 기록이 남지 않도록)
+  const hourlyCleanupInterval = setInterval(() => {
+    console.log(`[INFO] Hourly cleanup: Clearing processed app cancellations (size=${processedAppCancellations.size})`);
+    processedAppCancellations.clear();
+  }, 60 * 60 * 1000); // 1시간마다
+
+  // 페이지 종료 시 정리
+  page.once('close', () => {
+    clearInterval(hourlyCleanupInterval);
   });
 
   return { processedAppCancellations };
