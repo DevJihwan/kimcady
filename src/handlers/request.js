@@ -223,6 +223,16 @@ const setupRequestHandler = (page, accessToken, maps) => {
     // Store all requests for reference
     requestMap.set(url, { url, method, payload });
   });
+  
+  // 정리 인터벌 추가
+  const cleanupInterval = setInterval(() => {
+    // 필요에 따라 주기적인 정리 작업 추가 가능
+  }, 60 * 60 * 1000); // 1시간마다
+  
+  // 페이지 종료 시 정리
+  page.once('close', () => {
+    clearInterval(cleanupInterval);
+  });
 };
 
 const extractRevenueId = (url) => {
