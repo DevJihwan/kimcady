@@ -94,3 +94,228 @@ const setupResponseHandler = (page, accessToken, maps) => {
     }
   });
 };
+
+// 고객 정보 응답 처리 (앱 예약 감지용)
+const handleCustomerResponse = async (response, customerUpdates) => {
+  try {
+    const customerData = await response.json();
+    
+    if (!customerData || !customerData.id) {
+      console.log(`[WARN] Invalid customer data response format`);
+      return;
+    }
+    
+    const customerId = customerData.id;
+    const customerName = customerData.name || '';
+    const customerPhone = customerData.phone || '';
+    
+    // 고객 정보 중 최근 업데이트 정보 확인
+    let latestUpdateTime = null;
+    
+    if (customerData.customerinfo_set && Array.isArray(customerData.customerinfo_set) && customerData.customerinfo_set.length > 0) {
+      const customerInfo = customerData.customerinfo_set[0];
+      if (customerInfo.upd_date) {
+        latestUpdateTime = new Date(customerInfo.upd_date).getTime();
+      }
+    }
+    
+    console.log(`[INFO] Detected customer info access - customerId: ${customerId}, name: ${customerName}, updateTime: ${latestUpdateTime}`);
+    
+    // 현재 시간 기준으로 최근 업데이트된 고객 정보만 저장 (30초 이내)
+    const now = Date.now();
+    const thirtySecondsAgo = now - 30 * 1000;
+    
+    if (latestUpdateTime && latestUpdateTime > thirtySecondsAgo) {
+      console.log(`[INFO] Storing recent customer update for customerId: ${customerId}`);
+      customerUpdates.set(customerId, {
+        id: customerId,
+        name: customerName,
+        phone: customerPhone,
+        updateTime: latestUpdateTime,
+        timestamp: now
+      });
+    }
+  } catch (e) {
+    console.error(`[ERROR] Failed to parse customer response: ${e.message}`);
+  }
+};
+
+// 앱 예약 처리 (예약 목록 조회 후)
+const processAppBookings = async (response, accessToken, maps, customerUpdates, processedAppBookings) => {
+  const { processedBookings, paymentAmounts, paymentStatus } = maps;
+  
+  try {
+    // 예약 목록 파싱
+    const bookingData = await response.json();
+    if (!bookingData.results || !Array.isArray(bookingData.results)) {
+      return;
+    }
+    
+    console.log(`[INFO] Checking for app bookings in booking list...`);
+    
+    // 최근 고객 업데이트와 매칭되는 예약 찾기
+    for (const booking of bookingData.results) {
+      if (!booking.book_id || !booking.customer) {
+        continue;
+      }
+      
+      const bookId = booking.book_id;
+      const customerId = booking.customer;
+      const customerUpdate = customerUpdates.get(customerId);
+      
+      // 이미 처리된 예약은 건너뜀
+      if (processedBookings.has(bookId) || processedAppBookings.has(bookId)) {
+        continue;
+      }
+
+      // 예약 상태 체크
+      const isCanceled = booking.state === 'canceled';
+      const isSuccessful = booking.state === 'success';
+      
+      // 앱 예약만 찾기 (book_type이 'U' 또는 confirmed_by가 'IM' 또는 immediate_booked가 true)
+      const isAppBooking = booking.book_type === 'U' || booking.confirmed_by === 'IM' || booking.immediate_booked === true;
+      
+      if (isAppBooking) {
+        // 고객 업데이트 시간과 예약의 업데이트 시간 비교
+        let matchingUpdate = false;
+        
+        // 고객 정보가 있고 최근 업데이트된 경우
+        if (customerUpdate) {
+          // 예약의 customerinfo_set의 upd_date와 고객 업데이트 시간을 비교
+          if (booking.customer_detail && 
+              booking.customer_detail.customerinfo_set && 
+              booking.customer_detail.customerinfo_set.length > 0) {
+            
+            const bookingUpdTime = new Date(booking.customer_detail.customerinfo_set[0].upd_date).getTime();
+            const customerUpdTime = customerUpdate.updateTime;
+            
+            // 시간 차이가 1초 이내면 같은 업데이트로 간주
+            const timeDiff = Math.abs(bookingUpdTime - customerUpdTime);
+            if (timeDiff < 1000) {
+              console.log(`[INFO] Found matching update times for booking ${bookId}: booking=${new Date(bookingUpdTime).toISOString()}, customer=${new Date(customerUpdTime).toISOString()}`);
+              matchingUpdate = true;
+            }
+          }
+        }
+        
+        // 최근 업데이트 매칭 여부 또는 즉시 예약 여부 확인
+        const isRecentUpdate = matchingUpdate || (Date.now() - (customerUpdate?.timestamp || 0) < 60 * 1000); // 1분 이내
+        const isImmediateBooking = booking.immediate_booked === true || booking.confirmed_by === 'IM';
+        
+        // 매칭되는 업데이트가 있거나 즉시 예약이거나 취소된 예약 처리
+        if (isRecentUpdate || isImmediateBooking || isCanceled) {
+          const bookingState = isCanceled ? 'canceled' : (isSuccessful ? 'successful' : 'regular');
+          const bookingType = isImmediateBooking ? 'immediate' : 'standard';
+          
+          console.log(`[INFO] Detected ${bookingState} ${bookingType} app booking: bookId=${bookId}, customerId=${customerId}, state=${booking.state}`);
+          
+          // 결제 정보 가져오기
+          const revenueDetail = booking.revenue_detail || {};
+          const amount = parseInt(revenueDetail.amount || booking.amount || 0, 10);
+          
+          // 결제 완료 여부 확인
+          // 즉시 예약이거나 revenue_detail.finished가 true인 경우 완료로 처리
+          const finished = isImmediateBooking || revenueDetail.finished === true || revenueDetail.finished === 'true';
+          
+          console.log(`[INFO] Extracted payment info for book_id ${bookId}: amount=${amount}, finished=${finished}`);
+          
+          // 맵에 저장
+          paymentAmounts.set(bookId, amount);
+          paymentStatus.set(bookId, finished);
+          
+          if (isCanceled) {
+            // 취소된 예약 처리
+            try {
+              // Make sure we have a valid token
+              let currentToken = accessToken;
+              if (!currentToken) {
+                currentToken = await getAccessToken();
+              }
+              
+              console.log(`[INFO] Processing App Booking_Cancel for book_id: ${bookId}`);
+              
+              const cancelPayload = {
+                canceled_by: 'App User',
+                externalId: bookId
+              };
+              
+              await sendTo24GolfApi(
+                'Booking_Cancel', 
+                '', 
+                cancelPayload, 
+                null, 
+                currentToken, 
+                processedBookings, 
+                paymentAmounts, 
+                paymentStatus
+              );
+              
+              console.log(`[INFO] Processed App Booking_Cancel for book_id: ${bookId}`);
+              processedAppBookings.add(bookId);
+            } catch (error) {
+              console.error(`[ERROR] Failed to process App Booking_Cancel: ${error.message}`);
+            }
+          } else if (isSuccessful || isImmediateBooking) {
+            // 성공 또는 즉시 예약 처리
+            const bookingData = {
+              externalId: bookId,
+              name: booking.name || 'Unknown',
+              phone: booking.phone || '010-0000-0000',
+              partySize: parseInt(booking.person || 1, 10),
+              startDate: booking.start_datetime,
+              endDate: booking.end_datetime,
+              roomId: booking.room?.toString() || 'unknown',
+              hole: booking.hole,
+              paymented: finished,
+              paymentAmount: amount,
+              crawlingSite: 'KimCaddie',
+              immediate: isImmediateBooking
+            };
+            
+            try {
+              // Make sure we have a valid token
+              let currentToken = accessToken;
+              if (!currentToken) {
+                currentToken = await getAccessToken();
+              }
+              
+              console.log(`[INFO] Processing App Booking_Create for book_id: ${bookId} (Immediate: ${isImmediateBooking})`);
+              
+              await sendTo24GolfApi(
+                'Booking_Create', 
+                '', 
+                {}, 
+                bookingData, 
+                currentToken, 
+                processedBookings, 
+                paymentAmounts, 
+                paymentStatus
+              );
+              
+              console.log(`[INFO] Processed App Booking_Create for book_id: ${bookId}`);
+              processedAppBookings.add(bookId);
+            } catch (error) {
+              console.error(`[ERROR] Failed to process App Booking_Create: ${error.message}`);
+            }
+          }
+        }
+      }
+    }
+    
+    // 오래된 고객 업데이트 정보 정리
+    const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
+    for (const [customerId, data] of customerUpdates.entries()) {
+      if (data.timestamp < fiveMinutesAgo) {
+        customerUpdates.delete(customerId);
+      }
+    }
+    
+    // 오래된 처리 정보 정리 (하루에 한 번)
+    if (processedAppBookings.size > 1000) {
+      console.log(`[INFO] Clearing old processed app bookings (size=${processedAppBookings.size})`);
+      processedAppBookings.clear();
+    }
+  } catch (e) {
+    console.error(`[ERROR] Failed to process app bookings: ${e.message}`);
+  }
+};
