@@ -147,13 +147,22 @@ const sendTo24GolfApi = async (type, url, payload, response, accessToken, proces
     // 앱 예약인 경우와 웹 예약인 경우 처리 분리
     if (response && (response.bookType === 'U' || response.immediate === true)) {
       // 앱 예약 처리
+      const currentDateTime = new Date().toISOString().replace('Z', '+09:00');
+      
+      // startDate가 undefined거나 "undefined"인 경우 현재 시간 사용
+      let startDateTime = currentDateTime;
+      if (response.startDate && response.startDate !== "undefined") {
+        startDateTime = response.startDate;
+      }
+      
       apiData = {
         externalId: bookId,
         name: response.name || 'Unknown',
         phone: response.phone || '010-0000-0000',
         partySize: parseInt(response.partySize || 1, 10),
-        startDate: response.startDate || new Date().toISOString().replace('Z', '+09:00'),
-        endDate: response.endDate || calculateEndTime(response.startDate),
+        startDate: startDateTime,
+        endDate: response.endDate && response.endDate !== "undefined" ? 
+                response.endDate : calculateEndTime(startDateTime),
         roomId: response.roomId || 'unknown',
         paymented: isPaymentCompleted,
         paymentAmount,
@@ -273,7 +282,10 @@ const sendTo24GolfApi = async (type, url, payload, response, accessToken, proces
 
 // Helper function to calculate end time (1 hour after start time)
 const calculateEndTime = (startTime) => {
-  if (!startTime) return new Date().toISOString().replace('Z', '+09:00');
+  if (!startTime || startTime.includes('undefined')) {
+    console.log(`[WARN] Invalid start time for calculation: ${startTime}`);
+    return new Date().toISOString().replace('Z', '+09:00');
+  }
   
   try {
     const date = new Date(startTime);
