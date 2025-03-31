@@ -115,10 +115,18 @@ const sendTo24GolfApi = async (type, url, payload, response, accessToken, proces
       paymentAmounts.set(bookId, paymentAmount);
     }
     
-    // immediate_booked가 true이면 결제 완료로 처리
-    if (response.immediate === true || response.immediate_booked === true) {
-      isPaymentCompleted = true;
-      paymentStatus.set(bookId, true);
+    // immediate_booked가 true이면 결제 완료로 처리하던 부분 제거
+    // 수정: 결제 완료 여부는 이미 paymentStatus에 설정된 값만 사용
+    // if (response.immediate === true || response.immediate_booked === true) {
+    //   isPaymentCompleted = true;
+    //   paymentStatus.set(bookId, true);
+    // }
+    
+    // 이미 response.paymented 값이 있으면 그 값을 사용
+    if (response.paymented !== undefined) {
+      isPaymentCompleted = response.paymented;
+      paymentStatus.set(bookId, isPaymentCompleted);
+      console.log(`[INFO] Using payment status ${isPaymentCompleted} from response.paymented for book_id: ${bookId}`);
     }
   }
   
