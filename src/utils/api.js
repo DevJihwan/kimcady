@@ -87,6 +87,8 @@ const sendTo24GolfApi = async (type, url, payload, response, accessToken, proces
   }
 
   const bookId = response?.book_id || response?.externalId || payload?.externalId || 'unknown';
+  
+  // 취소 요청인 경우 중복 체크하지 않음
   if (type === 'Booking_Create' && processedBookings.has(bookId)) {
     console.log(`[INFO] Skipping duplicate Booking_Create for book_id: ${bookId}`);
     return;
@@ -94,8 +96,31 @@ const sendTo24GolfApi = async (type, url, payload, response, accessToken, proces
 
   // 결제 정보 로깅 및 확인
   // 항상 저장된 맵에서 결제 정보를 가져옴
-  const paymentAmount = paymentAmounts.get(bookId) || 0;
-  const isPaymentCompleted = paymentStatus.get(bookId) || false;
+  let paymentAmount = paymentAmounts.get(bookId) || 0;
+  let isPaymentCompleted = paymentStatus.get(bookId) || false;
+  
+  // 앱 예약인 경우 response에서 결제 정보 추가 확인
+  if (response && type === 'Booking_Create') {
+    // response.paymentAmount가 있다면 그 값을 사용
+    if (response.paymentAmount !== undefined && parseInt(response.paymentAmount, 10) > 0) {
+      paymentAmount = parseInt(response.paymentAmount, 10);
+      console.log(`[INFO] Using payment amount ${paymentAmount} from response object for book_id: ${bookId}`);
+      paymentAmounts.set(bookId, paymentAmount);
+    }
+    
+    // response.amount가 있다면 그 값을 사용
+    else if (response.amount !== undefined && parseInt(response.amount, 10) > 0) {
+      paymentAmount = parseInt(response.amount, 10);
+      console.log(`[INFO] Using amount ${paymentAmount} from response object for book_id: ${bookId}`);
+      paymentAmounts.set(bookId, paymentAmount);
+    }
+    
+    // immediate_booked가 true이면 결제 완료로 처리
+    if (response.immediate === true || response.immediate_booked === true) {
+      isPaymentCompleted = true;
+      paymentStatus.set(bookId, true);
+    }
+  }
   
   console.log(`[DEBUG] Payment info from maps for ${bookId} - Amount: ${paymentAmount}, Completed: ${isPaymentCompleted}`);
 
@@ -175,8 +200,14 @@ const sendTo24GolfApi = async (type, url, payload, response, accessToken, proces
     const currentAmount = paymentAmounts.get(bookId);
     const currentStatus = paymentStatus.get(bookId);
     
-    apiData.paymentAmount = currentAmount || 0;
-    apiData.paymented = currentStatus || false;
+    // 맵에 저장된 값이 있으면 사용, 없으면 이미 설정된 값 사용
+    if (currentAmount !== undefined && currentAmount > 0) {
+      apiData.paymentAmount = currentAmount;
+    }
+    
+    if (currentStatus !== undefined) {
+      apiData.paymented = currentStatus;
+    }
     
     console.log(`[DEBUG] Final payment values for ${bookId}: Amount=${apiData.paymentAmount}, Completed=${apiData.paymented}`);
   }
