@@ -139,10 +139,9 @@ const handleBookingListingResponse = async (response, maps) => {
       // Extract revenue detail information
       const revenueDetail = booking.revenue_detail || {};
       const amount = revenueDetail.amount || booking.amount || 0;
-      const finished = revenueDetail.finished === true || 
-                      revenueDetail.finished === 'true' || 
-                      booking.immediate_booked === true || 
-                      booking.confirmed_by === 'IM';
+      
+      // 수정: finished가 null 또는 undefined인 경우 false로 처리
+      const finished = revenueDetail.finished === true || revenueDetail.finished === 'true';
 
       // Store mappings
       revenueToBookingMap.set(revenueId, bookId);
