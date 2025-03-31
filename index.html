@@ -144,23 +144,6 @@
       box-shadow: 0 0 0 3px rgba(3, 102, 214, 0.3);
     }
 
-    /* 로그 영역 */
-    .log-section {
-      background-color: #f6f8fa;
-      border: 1px solid #e1e4e8;
-      border-radius: 6px;
-      padding: 16px;
-      max-height: 300px;
-      overflow-y: auto;
-      font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
-      font-size: 12px;
-      color: #24292e;
-    }
-
-    .log-section p {
-      margin: 4px 0;
-    }
-
     /* 버튼 스타일 (GitHub 스타일) */
     .btn {
       display: inline-block;
@@ -174,6 +157,8 @@
       text-decoration: none;
       cursor: pointer;
       transition: background-color 0.2s ease;
+      width: 120px; /* 버튼 너비 통일 */
+      text-align: center;
     }
 
     .btn:hover {
@@ -203,48 +188,82 @@
       border-color: #cb2431;
     }
 
-    .store-info {
+    .info-box {
       margin-top: 12px;
       padding: 12px;
-      background-color: #f0f8ff;
       border-radius: 4px;
-      border: 1px solid #cce5ff;
+      margin-bottom: 16px;
     }
 
-    .store-info h3 {
+    .info-box.active {
+      background-color: #e6ffec;
+      border: 1px solid #1a7f37;
+    }
+
+    .info-box.inactive {
+      background-color: #f6f8fa;
+      border: 1px solid #d0d7de;
+    }
+
+    .info-box h3 {
       font-size: 16px;
       margin-bottom: 4px;
+      display: flex;
+      align-items: center;
     }
 
-    .store-info p {
+    .info-box h3 .status-icon {
+      margin-right: 8px;
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+    }
+
+    .info-box h3 .status-icon.active {
+      background-color: #1a7f37;
+    }
+
+    .info-box h3 .status-icon.inactive {
+      background-color: #6e7781;
+    }
+
+    .info-box p {
       margin: 0;
       font-size: 14px;
     }
 
-    .settings-section {
+    .settings-container {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .setting-item {
       display: flex;
       justify-content: space-between;
-      padding: 12px 0;
-      border-top: 1px solid #e1e4e8;
-      margin-top: 12px;
+      align-items: center;
+      padding: 12px;
+      border-radius: 4px;
+      border: 1px solid #d0d7de;
     }
 
-    .login-status {
-      display: inline-block;
-      padding: 2px 8px;
-      border-radius: 12px;
+    .setting-info {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .setting-title {
+      font-weight: 600;
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+    }
+
+    .setting-status {
       font-size: 12px;
-      font-weight: 500;
-    }
-
-    .login-status.active {
-      background-color: #e6ffec;
-      color: #22863a;
-    }
-
-    .login-status.inactive {
-      background-color: #ffebe9;
-      color: #d73a49;
+      color: #6e7781;
+      margin-top: 4px;
     }
 
     /* 반응형 디자인 */
@@ -276,35 +295,39 @@
       <p>KimCaddie 예약 데이터를 수집 중입니다.</p>
       <p>Chrome 창에서 로그인 및 예약 관리를 진행해주세요.</p>
       
-      <div class="store-info" id="storeInfo">
-        <h3>현재 매장 정보</h3>
+      <div id="storeInfoBox" class="info-box inactive">
+        <h3><span class="status-icon inactive"></span> 매장 정보</h3>
         <p id="storeName">매장명: 로딩 중...</p>
         <p id="storeBranch"></p>
       </div>
       
-      <div class="settings-section">
-        <div>
-          <h4>로그인 정보</h4>
-          <p id="loginStatus">
-            <span class="login-status inactive">미설정</span>
-          </p>
+      <div class="settings-container">
+        <div class="setting-item">
+          <div class="setting-info">
+            <div class="setting-title">
+              <span id="loginStatusIcon" class="status-icon inactive" style="margin-right: 8px;"></span>
+              로그인 정보
+            </div>
+            <div id="loginStatusText" class="setting-status">
+              로그인 정보가 설정되지 않았습니다
+            </div>
+          </div>
+          <button class="btn btn-secondary" onclick="openAccountModal()">계정 설정</button>
         </div>
-        <button class="btn btn-secondary" onclick="openAccountModal()">계정 설정</button>
+        
+        <div class="setting-item">
+          <div class="setting-info">
+            <div class="setting-title">
+              <span id="storeStatusIcon" class="status-icon inactive" style="margin-right: 8px;"></span>
+              매장 설정
+            </div>
+            <div id="storeStatusText" class="setting-status">
+              현재 매장: <span id="currentStoreName">로딩 중...</span>
+            </div>
+          </div>
+          <button class="btn btn-secondary" onclick="openSettingsModal()">매장 설정</button>
+        </div>
       </div>
-      
-      <div style="margin-top: 16px; text-align: right;">
-        <button class="btn btn-secondary" onclick="openSettingsModal()">매장 설정</button>
-      </div>
-    </div>
-
-    <!-- 로그 섹션 -->
-    <div class="log-section" id="log">
-      <p>로그가 여기에 표시됩니다...</p>
-    </div>
-
-    <!-- 버튼 -->
-    <div style="text-align: center; margin-top: 16px;">
-      <button class="btn" onclick="clearLogs()">로그 지우기</button>
     </div>
   </div>
 
@@ -375,18 +398,40 @@
       ipcRenderer.on('store-info-response', (event, data) => {
         const storeNameEl = document.getElementById('storeName');
         const storeBranchEl = document.getElementById('storeBranch');
+        const currentStoreNameEl = document.getElementById('currentStoreName');
+        const storeInfoBoxEl = document.getElementById('storeInfoBox');
+        const storeStatusIconEl = document.getElementById('storeStatusIcon');
+        const storeStatusTextEl = document.getElementById('storeStatusText');
         
         if (data.success) {
+          // 매장 정보 상자 업데이트
           storeNameEl.textContent = `매장명: ${data.name || ''}`;
           if (data.branch) {
             storeBranchEl.textContent = `지점: ${data.branch}`;
             storeBranchEl.style.display = 'block';
+            currentStoreNameEl.textContent = `${data.name} (${data.branch})`;
           } else {
             storeBranchEl.style.display = 'none';
+            currentStoreNameEl.textContent = data.name || '';
           }
+          
+          // 상태 업데이트
+          storeInfoBoxEl.classList.remove('inactive');
+          storeInfoBoxEl.classList.add('active');
+          storeStatusIconEl.classList.remove('inactive');
+          storeStatusIconEl.classList.add('active');
+          storeStatusTextEl.innerHTML = `현재 매장: <strong>${currentStoreNameEl.textContent}</strong>`;
         } else {
           storeNameEl.textContent = '매장 정보를 불러올 수 없습니다';
           storeBranchEl.style.display = 'none';
+          currentStoreNameEl.textContent = '설정되지 않음';
+          
+          // 상태 업데이트
+          storeInfoBoxEl.classList.remove('active');
+          storeInfoBoxEl.classList.add('inactive');
+          storeStatusIconEl.classList.remove('active');
+          storeStatusIconEl.classList.add('inactive');
+          storeStatusTextEl.textContent = '매장이 설정되지 않았습니다';
         }
       });
     }
@@ -397,14 +442,19 @@
       
       // 로그인 상태 응답 처리
       ipcRenderer.on('login-status-response', (event, hasCredentials) => {
-        const loginStatusEl = document.getElementById('loginStatus');
+        const loginStatusIconEl = document.getElementById('loginStatusIcon');
+        const loginStatusTextEl = document.getElementById('loginStatusText');
         const clearCredentialsButton = document.getElementById('clearCredentialsButton');
         
         if (hasCredentials) {
-          loginStatusEl.innerHTML = '<span class="login-status active">설정됨</span>';
+          loginStatusIconEl.classList.remove('inactive');
+          loginStatusIconEl.classList.add('active');
+          loginStatusTextEl.innerHTML = '<strong>자동 로그인이 설정되었습니다</strong>';
           clearCredentialsButton.style.display = 'block';
         } else {
-          loginStatusEl.innerHTML = '<span class="login-status inactive">미설정</span>';
+          loginStatusIconEl.classList.remove('active');
+          loginStatusIconEl.classList.add('inactive');
+          loginStatusTextEl.textContent = '로그인 정보가 설정되지 않았습니다';
           clearCredentialsButton.style.display = 'none';
         }
       });
@@ -585,36 +635,6 @@
         }
       });
     }
-    
-    // 로그 추가 함수
-    function addLog(message) {
-      const logSection = document.getElementById('log');
-      const logEntry = document.createElement('p');
-      logEntry.textContent = message;
-      logSection.appendChild(logEntry);
-      logSection.scrollTop = logSection.scrollHeight; // 자동 스크롤
-    }
-
-    // 로그 지우기 함수
-    function clearLogs() {
-      const logSection = document.getElementById('log');
-      logSection.innerHTML = '<p>로그가 여기에 표시됩니다...</p>';
-    }
-
-    // 콘솔 로그를 UI로 리다이렉트 (개발용)
-    (function() {
-      const originalLog = console.log;
-      console.log = function(message) {
-        originalLog.apply(console, arguments);
-        addLog(message);
-      };
-
-      const originalError = console.error;
-      console.error = function(message) {
-        originalError.apply(console, arguments);
-        addLog(`[ERROR] ${message}`);
-      };
-    })();
     
     // 앱 상태 업데이트를 위한 리스너
     ipcRenderer.on('app-status', (event, statusText) => {
