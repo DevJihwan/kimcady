@@ -7,7 +7,8 @@
     "start": "electron src/main.js",
     "pack": "electron-builder --dir",
     "build": "electron-builder",
-    "build:win": "electron-builder --win --x64"
+    "build:win": "electron-builder --win --x64",
+    "postuninstall": "node scripts/cleanup.js"
   },
   "author": "DataLink-Studio",
   "license": "MIT",
@@ -23,7 +24,8 @@
             "ia32"
           ]
         }
-      ]
+      ],
+      "publisherName": "DataLink-Studio"
     },
     "nsis": {
       "oneClick": false,
@@ -36,7 +38,12 @@
       "createStartMenuShortcut": true,
       "uninstallDisplayName": "PandoPGC",
       "shortcutName": "PandoPGC",
-      "artifactName": "PandoPGC-Setup-${version}.${ext}"
+      "artifactName": "PandoPGC-Setup-${version}.${ext}",
+      "include": "scripts/installer.nsh",
+      "differentialPackage": false,
+      "errorDialog": true,
+      "warningsAsErrors": false,
+      "menuCategory": "PandoPGC"
     },
     "directories": {
       "buildResources": "build",
@@ -45,7 +52,18 @@
     "files": [
       "src/**/*",
       "index.html",
-      ".env"
+      ".env",
+      "scripts/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "scripts/uninstaller.js",
+        "to": "uninstaller.js"
+      }
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "scripts/cleanup.js"
     ]
   },
   "dependencies": {
