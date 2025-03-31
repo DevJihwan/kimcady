@@ -1,6 +1,5 @@
 const path = require('path');
 const fs = require('fs');
-const crypto = require('crypto');
 require('dotenv').config();
 
 // 설정 파일 경로
@@ -9,9 +8,6 @@ const CONFIG_FILE = path.join(CONFIG_PATH, 'config.json');
 
 // 기본 StoreID (처음 실행하거나 설정 파일이 없는 경우 사용)
 const DEFAULT_STORE_ID = '6690d7ea750ff9a6689e9af3';
-
-// 암호화 키 (실제 운영에서는 환경 변수나 더 안전한 방법으로 관리 필요)
-const ENCRYPTION_KEY = '8e3c54a78941e4a04c81fce3a89e54f7dfa127fc'; // 이것은 예시일 뿐, 실제 운영에서는 더 안전한 키 관리 필요
 
 // 설정 파일에서 읽기
 const getConfig = () => {
@@ -66,16 +62,12 @@ const saveStoreId = (storeId) => {
 const getUserCredentials = () => {
   const config = getConfig();
   
-  if (config.encryptedPhone && config.encryptedPassword) {
-    try {
-      return {
-        phone: decrypt(config.encryptedPhone),
-        password: decrypt(config.encryptedPassword),
-        hasCredentials: true
-      };
-    } catch (error) {
-      console.error(`[ERROR] Failed to decrypt credentials: ${error.message}`);
-    }
+  if (config.userPhone && config.userPassword) {
+    return {
+      phone: config.userPhone,
+      password: config.userPassword,
+      hasCredentials: true
+    };
   }
   
   return { 
@@ -89,54 +81,20 @@ const getUserCredentials = () => {
 const saveUserCredentials = (phone, password) => {
   const config = getConfig();
   
-  try {
-    config.encryptedPhone = encrypt(phone);
-    config.encryptedPassword = encrypt(password);
-    return saveConfig(config);
-  } catch (error) {
-    console.error(`[ERROR] Failed to encrypt credentials: ${error.message}`);
-    return false;
-  }
+  config.userPhone = phone;
+  config.userPassword = password;
+  
+  return saveConfig(config);
 };
 
 // 사용자 계정 정보 삭제
 const clearUserCredentials = () => {
   const config = getConfig();
   
-  delete config.encryptedPhone;
-  delete config.encryptedPassword;
+  delete config.userPhone;
+  delete config.userPassword;
   
   return saveConfig(config);
-};
-
-// 암호화 함수
-const encrypt = (text) => {
-  try {
-    const iv = crypto.randomBytes(16);
-    const cipher = crypto.createCipheriv('aes-256-cbc', Buffer.from(ENCRYPTION_KEY, 'hex'), iv);
-    let encrypted = cipher.update(text);
-    encrypted = Buffer.concat([encrypted, cipher.final()]);
-    return iv.toString('hex') + ':' + encrypted.toString('hex');
-  } catch (error) {
-    console.error(`[ERROR] Encryption failed: ${error.message}`);
-    throw error;
-  }
-};
-
-// 복호화 함수
-const decrypt = (text) => {
-  try {
-    const textParts = text.split(':');
-    const iv = Buffer.from(textParts[0], 'hex');
-    const encryptedText = Buffer.from(textParts[1], 'hex');
-    const decipher = crypto.createDecipheriv('aes-256-cbc', Buffer.from(ENCRYPTION_KEY, 'hex'), iv);
-    let decrypted = decipher.update(encryptedText);
-    decrypted = Buffer.concat([decrypted, decipher.final()]);
-    return decrypted.toString();
-  } catch (error) {
-    console.error(`[ERROR] Decryption failed: ${error.message}`);
-    throw error;
-  }
 };
 
 const getChromePath = () => {
