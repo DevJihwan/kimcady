@@ -167,6 +167,9 @@ const processAppBookings = async (response, accessToken, maps, customerUpdates, 
       if (processedBookings.has(bookId) || processedAppBookings.has(bookId)) {
         continue;
       }
+
+      // 예약 취소 상태 체크
+      const isCanceled = booking.state === 'canceled';
       
       // 앱 예약만 찾기 (book_type이 'U'이고 customer 필드가 있는 경우)
       const isAppBooking = booking.book_type === 'U' || booking.confirmed_by === 'IM' || booking.immediate_booked === true;
@@ -174,9 +177,8 @@ const processAppBookings = async (response, accessToken, maps, customerUpdates, 
       if (isAppBooking) {
         // 최근 고객 업데이트가 있거나, 일반 앱 예약인 경우
         const isRecentUpdate = customerUpdate && (Date.now() - customerUpdate.timestamp < 60 * 1000); // 1분 이내
-        const isCanceled = booking.state === 'canceled';
         
-        // 새 예약 또는 취소된 예약 처리
+        // 최근에 고객 정보가 업데이트 되었거나 취소된 예약 처리
         if (isRecentUpdate || booking.immediate_booked === true || isCanceled) {
           console.log(`[INFO] Detected ${isCanceled ? 'canceled' : (booking.immediate_booked ? 'immediate' : 'regular')} app booking: bookId=${bookId}, customerId=${customerId}, state=${booking.state}`);
           
