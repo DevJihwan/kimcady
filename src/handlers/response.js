@@ -222,8 +222,17 @@ const processAppBookings = async (response, accessToken, maps, customerUpdates, 
           const amount = parseInt(revenueDetail.amount || booking.amount || 0, 10);
           
           // 결제 완료 여부 확인
-          // 즉시 예약이거나 revenue_detail.finished가 true인 경우 완료로 처리
-          const finished = isImmediateBooking || revenueDetail.finished === true || revenueDetail.finished === 'true';
+          // finished가 null인 경우에도 즉시 예약일 때는 true로 처리
+          let finished = false;
+          
+          if (revenueDetail.finished === true || revenueDetail.finished === 'true') {
+            finished = true;
+          } else if (isImmediateBooking) {
+            // 즉시 예약의 경우 결제 완료로 처리
+            // finished가 null이더라도 즉시 예약은 완료된 것으로 간주
+            finished = true;
+            console.log(`[INFO] Setting payment as completed for immediate booking ${bookId}`);
+          }
           
           console.log(`[INFO] Extracted payment info for book_id ${bookId}: amount=${amount}, finished=${finished}`);
           
