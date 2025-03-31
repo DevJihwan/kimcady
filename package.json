@@ -1,7 +1,7 @@
 {
-  "name": "kimcaddie",
+  "name": "pandopgc",
   "version": "1.5.0",
-  "description": "KimCaddie 예약 데이터 수집기",
+  "description": "PandoPGC 예약 데이터 수집기",
   "main": "src/main.js",
   "scripts": {
     "start": "electron src/main.js",
@@ -12,8 +12,8 @@
   "author": "DataLink-Studio",
   "license": "MIT",
   "build": {
-    "appId": "com.KimCaddie",
-    "productName": "KimCaddie",
+    "appId": "com.PandoPGC",
+    "productName": "PandoPGC",
     "win": {
       "target": [
         {
@@ -34,9 +34,9 @@
       "runAfterFinish": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "uninstallDisplayName": "KimCaddie",
-      "shortcutName": "KimCaddie",
-      "artifactName": "KimCaddie-Setup-${version}.${ext}"
+      "uninstallDisplayName": "PandoPGC",
+      "shortcutName": "PandoPGC",
+      "artifactName": "PandoPGC-Setup-${version}.${ext}"
     },
     "directories": {
       "buildResources": "build",
