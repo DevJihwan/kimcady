@@ -4,9 +4,6 @@ const { sendTo24GolfApi, getAccessToken } = require('../utils/api');
 const setupRequestHandler = (page, accessToken, maps) => {
   const { requestMap, processedBookings, paymentAmounts, paymentStatus, bookIdToIdxMap, revenueToBookingMap, bookingDataMap } = maps;
 
-  // 앱 예약 취소 처리를 위한 세트 추가
-  const processedAppCancellations = new Set();
-
   page.on('request', async (request) => {
     const url = request.url();
     const method = request.method();
@@ -19,101 +16,93 @@ const setupRequestHandler = (page, accessToken, maps) => {
 
     const payload = parsePayload(headers, postData);
     if (!payload) {
-      console.log(`[WARN] Failed to parse payload for URL: ${url}`, method);
+      console.log(`[WARN] Failed to parse payload for URL: ${url}`);
       return;
     }
 
-    // 앱 예약 취소 처리 - confirm_state API
+    // 앱 예약 취소 처리 (confirm_state API)
     if (url.includes('/api/booking/confirm_state') && (method === 'PATCH' || method === 'PUT')) {
       console.log(`[INFO] App booking state change detected - URL: ${url}, Method: ${method}`);
       console.log(`[DEBUG] App booking state change payload:`, JSON.stringify(payload, null, 2));
       
-      // 예약 취소 감지
+      // 예약 취소 확인
       if (payload.state === 'canceled' && payload.book_id) {
         const bookId = payload.book_id;
+        console.log(`[INFO] App Booking_Cancel detected for book_id: ${bookId}`);
         
-        // 이미 처리된 취소인지 확인 - 가능한 자세한 로깅 추가
-        console.log(`[DEBUG] Checking cancellation state for book_id: ${bookId}`);
-        console.log(`[DEBUG] - In processedAppCancellations: ${processedAppCancellations.has(bookId)}`);
-        console.log(`[DEBUG] - In processedBookings: ${processedBookings.has(bookId)}`);
-        
-        // 처리 내역 확인 및 중복 체크 개선
-        // 24시간 이내에 처리된 경우에만 중복으로 간주
-        const recentlyProcessed = (processedAppCancellations.has(bookId) || processedBookings.has(bookId));
-        
-        if (recentlyProcessed) {
-          console.log(`[INFO] Skipping already processed app cancellation for book_id: ${bookId}`);
-          
-          // 중요: 확인을 위해 취소 요청을 저장해두고 로그만 출력
-          requestMap.set(`skipCancellation_${bookId}`, {
-            bookId,
-            timestamp: Date.now(),
-            reason: 'Already processed'
-          });
-        } else {
-          console.log(`[INFO] App Booking_Cancel detected for book_id: ${bookId}`);
-          try {
-            // 유효한 토큰 확보
-            let currentToken = accessToken;
-            if (!currentToken) {
-              currentToken = await getAccessToken();
-            }
-            
-            // 취소 사유 추출 (있을 경우)
-            let cancelReason = 'App User';
-            if (payload.bookingInfo) {
-              try {
-                const bookingInfo = JSON.parse(payload.bookingInfo);
-                if (bookingInfo.cancel_reason) {
-                  cancelReason = bookingInfo.cancel_reason;
-                }
-              } catch (e) {
-                console.error(`[ERROR] Failed to parse bookingInfo: ${e.message}`);
-              }
-            }
-            
-            // 취소 API 호출
-            const cancelPayload = {
-              externalId: bookId,
-              canceled_by: cancelReason
-            };
-            
-            console.log(`[INFO] Calling 24Golf API for cancellation of book_id: ${bookId}`);
-            const result = await sendTo24GolfApi(
-              'Booking_Cancel', 
-              url, 
-              cancelPayload, 
-              null, 
-              currentToken, 
-              processedBookings, 
-              paymentAmounts, 
-              paymentStatus
-            );
-            
-            console.log(`[INFO] Processed App Booking_Cancel for book_id: ${bookId}, Result:`, JSON.stringify(result || {}, null, 2));
-            
-            // 성공적으로 처리된 경우에만 세트에 추가
-            processedAppCancellations.add(bookId);
-            processedBookings.add(bookId);
-          } catch (error) {
-            console.error(`[ERROR] Failed to process App Booking_Cancel: ${error.message}`);
-            
-            // 오류 발생 시 재시도를 위해 처리 목록에서 제외
-            processedAppCancellations.delete(bookId);
-            processedBookings.delete(bookId);
+        try {
+          // 유효한 토큰 확보
+          let currentToken = accessToken;
+          if (!currentToken) {
+            currentToken = await getAccessToken();
           }
+          
+          // 취소 사유 추출 (있을 경우)
+          let cancelReason = 'App User';
+          if (payload.bookingInfo) {
+            try {
+              const bookingInfo = JSON.parse(payload.bookingInfo);
+              if (bookingInfo.cancel_reason) {
+                cancelReason = bookingInfo.cancel_reason;
+              }
+              
+              // 결제 금액 정보 추출 (있을 경우)
+              if (bookingInfo.amount) {
+                const amount = parseInt(bookingInfo.amount, 10) || 0;
+                console.log(`[INFO] Extracted payment amount ${amount} from bookingInfo for book_id: ${bookId}`);
+                paymentAmounts.set(bookId, amount);
+              }
+            } catch (e) {
+              console.error(`[ERROR] Failed to parse bookingInfo: ${e.message}`);
+            }
+          }
+          
+          // 기존 세트에서 제거 (재처리를 위해)
+          processedBookings.delete(bookId);
+          
+          // 취소 API 호출
+          const cancelPayload = {
+            externalId: bookId,
+            canceled_by: cancelReason
+          };
+          
+          console.log(`[INFO] Sending cancel request to 24Golf API for book_id: ${bookId}`);
+          await sendTo24GolfApi(
+            'Booking_Cancel', 
+            url, 
+            cancelPayload, 
+            null, 
+            currentToken, 
+            processedBookings, 
+            paymentAmounts, 
+            paymentStatus
+          );
+          
+          console.log(`[INFO] Successfully processed App Booking_Cancel for book_id: ${bookId}`);
+        } catch (error) {
+          console.error(`[ERROR] Failed to process App Booking_Cancel: ${error.message}`);
         }
       }
       
       // 요청 저장
       requestMap.set(url, { url, method, payload, type: 'App_Booking_State_Change' });
-      return;
     }
 
     // 등록 (Booking_Create)
-    if (url.includes('/owner/booking') && method === 'POST') {
+    else if (url.includes('/owner/booking') && method === 'POST') {
       console.log(`[INFO] Booking_Create detected - URL: ${url}, Method: ${method}`);
       console.log(`[DEBUG] Booking_Create payload:`, JSON.stringify(payload, null, 2));
+      
+      // 결제 정보 추출 시도
+      if (payload.amount) {
+        const amount = parseInt(payload.amount, 10) || 0;
+        const bookId = payload.book_id;
+        if (bookId && amount > 0) {
+          console.log(`[INFO] Extracted payment amount ${amount} from create payload for book_id: ${bookId}`);
+          paymentAmounts.set(bookId, amount);
+        }
+      }
+      
       bookingDataMap.set(url, { type: 'Booking_Create', payload, timestamp: Date.now() });
       requestMap.set(url, { url, method, payload, type: 'Booking_Create' });
     }
@@ -201,7 +190,11 @@ const setupRequestHandler = (page, accessToken, maps) => {
               timestamp: Date.now()
             });
             
-            console.log(`[INFO] Stored revenue update for book_id ${bookId}: amount=${amount}, finished=${finished}`);
+            // 결제 금액 정보 즉시 업데이트
+            paymentAmounts.set(bookId, amount);
+            paymentStatus.set(bookId, finished);
+            
+            console.log(`[INFO] Stored and updated payment for book_id ${bookId}: amount=${amount}, finished=${finished}`);
           } else {
             console.log(`[WARN] No matching book_id found for revenue ID ${revenueId}, storing temporary data`);
             // book_idx와 revenue ID 매핑 저장
@@ -230,32 +223,6 @@ const setupRequestHandler = (page, accessToken, maps) => {
     // Store all requests for reference
     requestMap.set(url, { url, method, payload });
   });
-
-  // 5분마다 processedAppCancellations 세트 정리
-  const cleanupInterval = setInterval(() => {
-    if (processedAppCancellations.size > 500) {
-      console.log(`[INFO] Clearing old processed app cancellations (size=${processedAppCancellations.size})`);
-      processedAppCancellations.clear();
-    }
-  }, 5 * 60 * 1000); // 5분마다
-
-  // 페이지 종료 시 정리
-  page.once('close', () => {
-    clearInterval(cleanupInterval);
-  });
-
-  // 1시간마다 전체 취소 처리 세트 초기화 (자주 초기화하여 오래된 기록이 남지 않도록)
-  const hourlyCleanupInterval = setInterval(() => {
-    console.log(`[INFO] Hourly cleanup: Clearing processed app cancellations (size=${processedAppCancellations.size})`);
-    processedAppCancellations.clear();
-  }, 60 * 60 * 1000); // 1시간마다
-
-  // 페이지 종료 시 정리
-  page.once('close', () => {
-    clearInterval(hourlyCleanupInterval);
-  });
-
-  return { processedAppCancellations };
 };
 
 const extractRevenueId = (url) => {
