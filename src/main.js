@@ -74,7 +74,7 @@ const main = async () => {
     }, 60 * 60 * 1000); // 1시간마다
 
     // 핸들러 설정
-    const { processedAppCancellations } = setupRequestHandler(page, accessToken, maps);
+    setupRequestHandler(page, accessToken, maps);
     setupResponseHandler(page, accessToken, maps);
 
     // 타임아웃 관리 (5분마다 확인)
@@ -100,10 +100,6 @@ const main = async () => {
       if (currentHour === 0 && currentMinute < 5) { // 자정~12:05 사이
         console.log('[INFO] Daily cleanup: Clearing processed bookings sets');
         maps.processedBookings.clear();
-        // 앱 예약 취소 처리 세트도 초기화
-        if (processedAppCancellations) {
-          processedAppCancellations.clear();
-        }
       }
     }, 60000); // 1분마다 확인
 
