@@ -1,5 +1,13 @@
 const { sendTo24GolfApi, getAccessToken } = require('../utils/api');
 const { parseMultipartFormData } = require('../utils/parser');
+const {
+  processPendingBookingUpdates,
+  findBookIdByRevenueIdOrBookIdx,
+  extractRevenueId,
+  handleBookingListingResponse,
+  handleRevenueResponse,
+  handleBookingCreateResponse
+} = require('./response-helpers');
 
 const setupResponseHandler = (page, accessToken, maps) => {
   const { requestMap, processedBookings, paymentAmounts, paymentStatus, bookIdToIdxMap, revenueToBookingMap, bookingDataMap } = maps;
@@ -319,3 +327,5 @@ const processAppBookings = async (response, accessToken, maps, customerUpdates, 
     console.error(`[ERROR] Failed to process app bookings: ${e.message}`);
   }
 };
+
+module.exports = { setupResponseHandler };
