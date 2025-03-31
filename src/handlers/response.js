@@ -228,12 +228,6 @@ const processAppBookings = async (response, accessToken, maps, customerUpdates, 
           if (revenueDetail.finished === true || revenueDetail.finished === 'true') {
             finished = true;
           }
-          // 이 부분을 수정 - finished가 null인 경우 true로 설정하던 로직 제거
-          // 기존 코드:
-          // else if (revenueDetail.finished === null && isImmediateBooking) {
-          //   finished = true;
-          //   console.log(`[INFO] Setting payment as completed for immediate booking ${bookId} with finished=null`);
-          // }
           
           console.log(`[DEBUG] Extracted payment info for book_id ${bookId}: amount=${amount}, finished=${finished}, revenue_detail.finished=${revenueDetail.finished}`);
           
