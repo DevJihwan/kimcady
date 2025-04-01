@@ -56,8 +56,8 @@ const setupResponseHandler = (page, accessToken, maps) => {
           if (bookId && state === 'success') {
             console.log(`[INFO] Detected booking confirmation: bookId=${bookId}, room=${room}, state=${state}`);
             
-            // 예약 정보 추출
             try {
+              // 예약 정보 추출
               let bookingInfo = {};
               if (patchPayload.bookingInfo) {
                 try {
@@ -89,8 +89,8 @@ const setupResponseHandler = (page, accessToken, maps) => {
               }
               paymentStatus.set(bookId, finished);
               
-              // 예약 데이터 준비
-              const bookingData = {
+              // 예약 데이터 준비 - 직접 변수 값 지정하여 명확하게 처리
+              const apiData = {
                 externalId: bookId,
                 name: name,
                 phone: phone,
@@ -112,13 +112,14 @@ const setupResponseHandler = (page, accessToken, maps) => {
               }
               
               console.log(`[INFO] Processing Confirmed Booking_Create for book_id: ${bookId}`);
+              console.log(`[DEBUG] Sending API data for confirmed booking:`, JSON.stringify(apiData, null, 2));
               
-              // 예약 등록 API 호출
+              // 예약 등록 API 호출 - 직접 apiData 객체를 전달
               await sendTo24GolfApi(
                 'Booking_Create', 
                 '', 
                 {}, 
-                bookingData, 
+                apiData, 
                 currentToken, 
                 processedBookings, 
                 paymentAmounts, 
@@ -340,6 +341,7 @@ const processCustomerBookings = (customerId, bookingData, accessToken, maps, pro
           }
           
           console.log(`[INFO] Processing Auto Booking_Create for book_id: ${bookId}`);
+          console.log(`[DEBUG] Sending API data for auto booking:`, JSON.stringify(bookingData, null, 2));
           
           // 예약 등록 API 호출
           sendTo24GolfApi(
@@ -536,7 +538,7 @@ const processAppBookings = async (response, accessToken, maps, customerUpdates, 
             }
           } else if (isSuccessful || isImmediateBooking) {
             // 성공 또는 즉시 예약 처리
-            const bookingData = {
+            const apiData = {
               externalId: bookId,
               name: booking.name || 'Unknown',
               phone: booking.phone || '010-0000-0000',
@@ -559,12 +561,13 @@ const processAppBookings = async (response, accessToken, maps, customerUpdates, 
               }
               
               console.log(`[INFO] Processing App Booking_Create for book_id: ${bookId} (Immediate: ${isImmediateBooking})`);
+              console.log(`[DEBUG] Sending API data for app booking:`, JSON.stringify(apiData, null, 2));
               
               await sendTo24GolfApi(
                 'Booking_Create', 
                 '', 
                 {}, 
-                bookingData, 
+                apiData, 
                 currentToken, 
                 processedBookings, 
                 paymentAmounts, 
