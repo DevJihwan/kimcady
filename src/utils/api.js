@@ -144,8 +144,21 @@ const sendTo24GolfApi = async (type, url, payload, response, accessToken, proces
     apiMethod = 'POST';
     apiUrl = `${API_BASE_URL}/stores/${storeId}/reservation/crawl`;
     
+    // 중요: 데이터 재구성 없이 전달된 response 객체 그대로 사용
+    if (response && response.startDate && response.roomId) {
+      // 완전한 API 데이터가 response에 있는 경우 (예약 확정 이벤트)
+      console.log(`[INFO] Using complete API data from response object`);
+      
+      // 받은 데이터를 그대로 사용하되, 결제 정보만 업데이트
+      apiData = { 
+        ...response,
+        paymented: isPaymentCompleted,
+        paymentAmount: paymentAmount,
+        crawlingSite: 'KimCaddie'
+      };
+    }
     // 앱 예약인 경우와 웹 예약인 경우 처리 분리
-    if (response && (response.bookType === 'U' || response.immediate === true)) {
+    else if (response && (response.bookType === 'U' || response.immediate === true)) {
       // 앱 예약 처리
       const currentDateTime = new Date().toISOString().replace('Z', '+09:00');
       
