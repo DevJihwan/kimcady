@@ -1,79 +1,19 @@
 {
-  "name": "pandopgc",
-  "version": "1.5.0",
-  "description": "PandoPGC 예약 데이터 수집기",
-  "main": "src/main.js",
+  "name": "kimcady-crawler",
+  "version": "1.0.0",
+  "description": "24golf KimCaddie Crawling Service",
+  "main": "index.js",
   "scripts": {
-    "start": "electron src/main.js",
-    "pack": "electron-builder --dir",
-    "build": "electron-builder",
-    "build:win": "electron-builder --win --x64",
-    "postuninstall": "node scripts/cleanup.js"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node src/index.js"
   },
-  "author": "DataLink-Studio",
-  "license": "MIT",
-  "build": {
-    "appId": "com.PandoPGC",
-    "productName": "PandoPGC",
-    "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64",
-            "ia32"
-          ]
-        }
-      ],
-      "publisherName": "DataLink-Studio"
-    },
-    "nsis": {
-      "oneClick": false,
-      "perMachine": true,
-      "allowElevation": true,
-      "allowToChangeInstallationDirectory": true,
-      "deleteAppDataOnUninstall": true,
-      "runAfterFinish": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "uninstallDisplayName": "PandoPGC",
-      "shortcutName": "PandoPGC",
-      "artifactName": "PandoPGC-Setup-${version}.${ext}",
-      "include": "scripts/installer.nsh",
-      "differentialPackage": false,
-      "errorDialog": true,
-      "warningsAsErrors": false,
-      "menuCategory": "PandoPGC"
-    },
-    "directories": {
-      "buildResources": "build",
-      "output": "dist"
-    },
-    "files": [
-      "src/**/*",
-      "index.html",
-      ".env",
-      "scripts/**/*"
-    ],
-    "extraResources": [
-      {
-        "from": "scripts/uninstaller.js",
-        "to": "uninstaller.js"
-      }
-    ],
-    "asar": true,
-    "asarUnpack": [
-      "scripts/cleanup.js"
-    ]
-  },
+  "author": "",
+  "license": "ISC",
   "dependencies": {
-    "axios": "^1.6.8",
-    "dotenv": "^16.4.5",
-    "puppeteer-core": "^22.6.5"
-  },
-  "devDependencies": {
-    "electron": "^25.0.0",
-    "electron-builder": "^24.13.3",
-    "electron-packager": "^17.1.2"
+    "axios": "^1.6.2",
+    "form-data": "^4.0.0",
+    "puppeteer": "^21.5.2",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
   }
 }
