@@ -39,8 +39,104 @@ const setupResponseHandler = (page, accessToken, maps) => {
     }
 
     try {
+      // 예약 상태 변경 API (예약 확정)
+      if (url.includes('/api/booking/confirm_state') && method === 'PATCH' && status === 200) {
+        console.log(`[INFO] App booking state change detected - URL: ${url}, Method: ${method}`);
+        
+        // 페이로드 파싱
+        const patchPayload = parseMultipartFormData(request.postData());
+        if (patchPayload) {
+          console.log(`[DEBUG] App booking state change payload:`, JSON.stringify(patchPayload, null, 2));
+          
+          // book_id와 state 추출
+          const bookId = patchPayload.book_id;
+          const state = patchPayload.state;
+          const room = patchPayload.room;
+          
+          if (bookId && state === 'success') {
+            console.log(`[INFO] Detected booking confirmation: bookId=${bookId}, room=${room}, state=${state}`);
+            
+            // 예약 정보 추출
+            try {
+              let bookingInfo = {};
+              if (patchPayload.bookingInfo) {
+                try {
+                  bookingInfo = JSON.parse(patchPayload.bookingInfo);
+                  console.log(`[DEBUG] Parsed booking info:`, JSON.stringify(bookingInfo, null, 2));
+                } catch (e) {
+                  console.error(`[ERROR] Failed to parse bookingInfo JSON: ${e.message}`);
+                }
+              }
+              
+              // 예약 정보에서 필요한 데이터 추출
+              const name = bookingInfo.name || patchPayload.name || 'Unknown';
+              const phone = bookingInfo.phone || patchPayload.phone || '010-0000-0000';
+              const partySize = parseInt(bookingInfo.person || patchPayload.person || 1, 10);
+              const startDate = bookingInfo.start_datetime || null;
+              const endDate = bookingInfo.end_datetime || null;
+              const roomId = room || bookingInfo.room || 'unknown';
+              const amount = parseInt(bookingInfo.amount || 0, 10);
+              const hole = bookingInfo.hole || '9';
+              
+              console.log(`[DEBUG] Extracted booking data - name: ${name}, startDate: ${startDate}, roomId: ${roomId}`);
+              
+              // 결제 완료 여부 (항상 false로 설정)
+              const finished = false;
+              
+              // 맵에 저장
+              if (amount > 0) {
+                paymentAmounts.set(bookId, amount);
+              }
+              paymentStatus.set(bookId, finished);
+              
+              // 예약 데이터 준비
+              const bookingData = {
+                externalId: bookId,
+                name: name,
+                phone: phone,
+                partySize: partySize,
+                startDate: startDate,
+                endDate: endDate,
+                roomId: roomId,
+                hole: hole,
+                paymented: finished,
+                paymentAmount: amount,
+                crawlingSite: 'KimCaddie',
+                immediate: false
+              };
+              
+              // 유효한 토큰 확인
+              let currentToken = accessToken;
+              if (!currentToken) {
+                currentToken = await getAccessToken();
+              }
+              
+              console.log(`[INFO] Processing Confirmed Booking_Create for book_id: ${bookId}`);
+              
+              // 예약 등록 API 호출
+              await sendTo24GolfApi(
+                'Booking_Create', 
+                '', 
+                {}, 
+                bookingData, 
+                currentToken, 
+                processedBookings, 
+                paymentAmounts, 
+                paymentStatus
+              );
+              
+              console.log(`[INFO] Processed Confirmed Booking_Create for book_id: ${bookId}`);
+              processedAppBookings.add(bookId);
+            } catch (error) {
+              console.error(`[ERROR] Failed to process confirmed booking: ${error.message}`);
+              console.error(`[ERROR] Stack trace:`, error.stack);
+            }
+          }
+        }
+      }
+
       // 고객 정보 API (앱 예약 감지)
-      if (url.includes('/api/owner/customer/') && method === 'GET' && status === 200) {
+      else if (url.includes('/api/owner/customer/') && method === 'GET' && status === 200) {
         console.log(`[DEBUG] Processing customer info API response: ${url}`);
         const customerId = await handleCustomerResponse(response, customerUpdates);
         
@@ -87,6 +183,7 @@ const setupResponseHandler = (page, accessToken, maps) => {
       
       // /owner/booking/ GET 응답 처리 (Getting existing bookings and payment info)
       else if (url.includes('/owner/booking/') && method === 'GET' && status === 200) {
+        console.log(`[INFO] Detected GET /owner/booking/ - will process pending updates after response`);
         const responseJson = await response.json();
         console.log(`[DEBUG] Received booking data, caching it for future use`);
         
