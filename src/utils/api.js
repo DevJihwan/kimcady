@@ -75,6 +75,31 @@ const getStoreInfo = async (storeId) => {
   }
 };
 
+// 24golf API에서 허용하는 필드만 추출하는 함수
+const extractAllowedFields = (data) => {
+  const allowedFields = [
+    'externalId',
+    'name',
+    'phone',
+    'partySize',
+    'startDate',
+    'endDate',
+    'roomId',
+    'paymented',
+    'paymentAmount',
+    'crawlingSite'
+  ];
+  
+  const result = {};
+  for (const field of allowedFields) {
+    if (data[field] !== undefined) {
+      result[field] = data[field];
+    }
+  }
+  
+  return result;
+};
+
 const sendTo24GolfApi = async (type, url, payload, response, accessToken, processedBookings = new Set(), paymentAmounts = new Map(), paymentStatus = new Map()) => {
   if (!accessToken) {
     console.error(`[API Error] Cannot send ${type}: Missing access token`);
@@ -115,13 +140,6 @@ const sendTo24GolfApi = async (type, url, payload, response, accessToken, proces
       paymentAmounts.set(bookId, paymentAmount);
     }
     
-    // immediate_booked가 true이면 결제 완료로 처리하던 부분 제거
-    // 수정: 결제 완료 여부는 이미 paymentStatus에 설정된 값만 사용
-    // if (response.immediate === true || response.immediate_booked === true) {
-    //   isPaymentCompleted = true;
-    //   paymentStatus.set(bookId, true);
-    // }
-    
     // 이미 response.paymented 값이 있으면 그 값을 사용
     if (response.paymented !== undefined) {
       isPaymentCompleted = response.paymented;
@@ -144,20 +162,28 @@ const sendTo24GolfApi = async (type, url, payload, response, accessToken, proces
     apiMethod = 'POST';
     apiUrl = `${API_BASE_URL}/stores/${storeId}/reservation/crawl`;
     
-    // 중요: 데이터 재구성 없이 전달된 response 객체 그대로 사용
+    // 완전한 API 데이터가 response에 있는 경우 (예약 확정)
     if (response && response.startDate && response.roomId) {
-      // 완전한 API 데이터가 response에 있는 경우 (예약 확정 이벤트)
       console.log(`[INFO] Using complete API data from response object`);
       
-      // 받은 데이터를 그대로 사용하되, 결제 정보만 업데이트
-      apiData = { 
-        ...response,
+      // 데이터를 복사해서 기본 API 데이터 생성
+      const tempData = { 
+        externalId: bookId,
+        name: response.name || 'Unknown',
+        phone: response.phone || '010-0000-0000',
+        partySize: parseInt(response.partySize || 1, 10),
+        startDate: response.startDate,
+        endDate: response.endDate,
+        roomId: response.roomId,
         paymented: isPaymentCompleted,
         paymentAmount: paymentAmount,
         crawlingSite: 'KimCaddie'
       };
+      
+      // 필수 필드만 포함된 객체 생성
+      apiData = extractAllowedFields(tempData);
     }
-    // 앱 예약인 경우와 웹 예약인 경우 처리 분리
+    // 앱 예약인 경우
     else if (response && (response.bookType === 'U' || response.immediate === true)) {
       // 앱 예약 처리
       const currentDateTime = new Date().toISOString().replace('Z', '+09:00');
@@ -168,7 +194,7 @@ const sendTo24GolfApi = async (type, url, payload, response, accessToken, proces
         startDateTime = response.startDate;
       }
       
-      apiData = {
+      const tempData = {
         externalId: bookId,
         name: response.name || 'Unknown',
         phone: response.phone || '010-0000-0000',
@@ -181,10 +207,12 @@ const sendTo24GolfApi = async (type, url, payload, response, accessToken, proces
         paymentAmount,
         crawlingSite: 'KimCaddie'
       };
+      
       console.log(`[INFO] Creating API data for app booking`);
+      apiData = extractAllowedFields(tempData);
     } else {
       // 웹 예약 처리 (기존 방식)
-      apiData = {
+      const tempData = {
         externalId: bookId,
         name: response.name || payload?.name || 'Unknown',
         phone: response.phone || payload?.phone || '010-0000-0000',
@@ -196,11 +224,13 @@ const sendTo24GolfApi = async (type, url, payload, response, accessToken, proces
         paymentAmount,
         crawlingSite: 'KimCaddie'
       };
+      
+      apiData = extractAllowedFields(tempData);
     }
   } else if (type === 'Booking_Update') {
     apiMethod = 'PATCH';
     apiUrl = `${API_BASE_URL}/stores/${storeId}/reservation/crawl`;
-    apiData = {
+    const tempData = {
       externalId: bookId,
       name: payload.name || 'Unknown',
       phone: payload.phone || '010-0000-0000',
@@ -212,6 +242,8 @@ const sendTo24GolfApi = async (type, url, payload, response, accessToken, proces
       paymentAmount,
       crawlingSite: 'KimCaddie'
     };
+    
+    apiData = extractAllowedFields(tempData);
   } else if (type === 'Booking_Cancel') {
     apiMethod = 'DELETE';
     apiUrl = `${API_BASE_URL}/stores/${storeId}/reservation/crawl`;
