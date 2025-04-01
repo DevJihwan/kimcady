@@ -1,6 +1,5 @@
 const { sendTo24GolfApi, getAccessToken } = require('../utils/api');
 const { parseMultipartFormData } = require('../utils/parser');
-const axios = require('axios');
 const {
   processPendingBookingUpdates,
   findBookIdByRevenueIdOrBookIdx,
@@ -12,6 +11,11 @@ const {
 
 // 추가한 전역 변수 - API 요청 중복 방지를 위한 Set
 let processedCustomerRequests = new Set();
+// 예약 데이터 캐시를 저장할 객체
+let bookingDataCache = {
+  timestamp: 0,
+  data: null
+};
 
 const setupResponseHandler = (page, accessToken, maps) => {
   const { requestMap, processedBookings, paymentAmounts, paymentStatus, bookIdToIdxMap, revenueToBookingMap, bookingDataMap } = maps;
@@ -40,7 +44,7 @@ const setupResponseHandler = (page, accessToken, maps) => {
         console.log(`[DEBUG] Processing customer info API response: ${url}`);
         const customerId = await handleCustomerResponse(response, customerUpdates);
         
-        // 고객 ID가 있으면 recentCustomerIds에 추가
+        // 고객 ID가 있으면 10초 후에 예약 확인
         if (customerId) {
           console.log(`[DEBUG] Detected customerId: ${customerId}`);
           // 이미 처리 중인 고객 ID는 건너뜀
@@ -52,159 +56,21 @@ const setupResponseHandler = (page, accessToken, maps) => {
           // 요청 중복 방지
           recentCustomerIds.add(customerId);
           processedCustomerRequests.add(customerId);
-          console.log(`[INFO] Added customer ${customerId} to recent checks, will check bookings in 10 seconds`);
+          console.log(`[INFO] Added customer ${customerId} to recent checks, will process after booking data is received`);
           
-          // 고객 정보 조회 후 10초 후에 해당 고객의 예약 목록을 확인
+          // 최신 예약 데이터를 얻은 후 처리 (10초 후)
           setTimeout(async () => {
             try {
-              // 예약 목록 조회 URL 생성 (현재 날짜 기준으로 7일 범위)
-              const now = new Date();
-              const dateFrom = new Date(now);
-              dateFrom.setDate(dateFrom.getDate() - 1); // 어제부터
-              const dateTo = new Date(now);
-              dateTo.setDate(dateTo.getDate() + 7); // 7일 후까지
-              
-              const dateFromStr = dateFrom.toISOString().split('T')[0] + 'T00:00:00';
-              const dateToStr = dateTo.toISOString().split('T')[0] + 'T23:59:59';
-              
-              // 예약 목록 조회 URL
-              const bookingUrl = `https://api.kimcaddie.com/api/owner/booking/?date_from=${dateFromStr}&date_to=${dateToStr}&state=success,failed,canceled,canceling&limit=500&payment_include=true&customer_include=true`;
-              
-              console.log(`[INFO] Checking bookings after 10 seconds`);
-              console.log(`[INFO] Booking check URL: ${bookingUrl}`);
-              
-              // 직접 API 호출
-              try {
-                // 현재 쿠키 가져오기
-                const cookies = await page.cookies();
-                const cookieString = cookies
-                  .map(cookie => `${cookie.name}=${cookie.value}`)
-                  .join('; ');
-                
-                console.log(`[DEBUG] Using cookies for API request. Cookie length: ${cookieString.length}`);
-                
-                // API 요청 헤더 준비
-                const headers = {
-                  'Cookie': cookieString,
-                  'User-Agent': await page.evaluate(() => navigator.userAgent),
-                  'Accept': 'application/json',
-                  'Content-Type': 'application/json',
-                  'X-Requested-With': 'XMLHttpRequest'
-                };
-                
-                console.log(`[DEBUG] Preparing to send booking API request with headers`);
-                
-                // 예약 목록 조회 요청
-                const bookingResponse = await axios.get(bookingUrl, { headers });
-                
-                console.log(`[INFO] Booking API response status: ${bookingResponse.status}`);
-                
-                // 응답 데이터 구조 확인 로깅
-                console.log(`[DEBUG] Booking response data structure: ${Object.keys(bookingResponse.data).join(', ')}`);
-                console.log(`[DEBUG] Has results array: ${bookingResponse.data.results ? 'YES' : 'NO'}`);
-                console.log(`[DEBUG] Results count: ${bookingResponse.data.results ? bookingResponse.data.results.length : 0}`);
-                
-                if (bookingResponse.data && bookingResponse.data.results && Array.isArray(bookingResponse.data.results)) {
-                  console.log(`[INFO] Checking ${bookingResponse.data.results.length} bookings for customer ${customerId}`);
-                  
-                  // 고객 ID에 해당하는 예약 필터링
-                  const customerBookings = bookingResponse.data.results.filter(booking => 
-                    booking.customer === customerId && 
-                    booking.state === 'success' &&
-                    !processedBookings.has(booking.book_id) &&
-                    !processedAppBookings.has(booking.book_id)
-                  );
-                  
-                  console.log(`[INFO] Found ${customerBookings.length} matching success bookings for customer ${customerId}`);
-                  console.log(`[DEBUG] Customer bookings: ${JSON.stringify(customerBookings.map(b => ({ id: b.book_id, state: b.state })))}`);
-                  
-                  if (customerBookings.length > 0) {
-                    // 처리할 예약이 있음
-                    for (const booking of customerBookings) {
-                      const bookId = booking.book_id;
-                      
-                      // 예약 ID 로깅
-                      console.log(`[DEBUG] Processing booking: ${bookId}`);
-                      
-                      // 결제 정보 가져오기
-                      const revenueDetail = booking.revenue_detail || {};
-                      const amount = parseInt(revenueDetail.amount || booking.amount || 0, 10);
-                      
-                      // 결제 완료 여부 확인 (finished가 true인 경우에만 true)
-                      const finished = revenueDetail.finished === true || revenueDetail.finished === 'true';
-                      
-                      console.log(`[DEBUG] Booking info - book_id: ${bookId}, customer: ${booking.customer}, state: ${booking.state}`);
-                      console.log(`[DEBUG] Extracted payment info for book_id ${bookId}: amount=${amount}, finished=${finished}, revenue_detail:`, revenueDetail);
-                      
-                      // 맵에 저장
-                      paymentAmounts.set(bookId, amount);
-                      paymentStatus.set(bookId, finished);
-                      
-                      try {
-                        // 예약 처리
-                        const bookingData = {
-                          externalId: bookId,
-                          name: booking.name || 'Unknown',
-                          phone: booking.phone || '010-0000-0000',
-                          partySize: parseInt(booking.person || 1, 10),
-                          startDate: booking.start_datetime,
-                          endDate: booking.end_datetime,
-                          roomId: booking.room?.toString() || 'unknown',
-                          hole: booking.hole,
-                          paymented: finished,
-                          paymentAmount: amount,
-                          crawlingSite: 'KimCaddie',
-                          immediate: booking.immediate_booked || false
-                        };
-                        
-                        console.log(`[DEBUG] Prepared booking data:`, JSON.stringify(bookingData));
-                        
-                        // 유효한 토큰 확인
-                        let currentToken = accessToken;
-                        if (!currentToken) {
-                          console.log(`[DEBUG] No access token available, fetching new one`);
-                          currentToken = await getAccessToken();
-                        }
-                        
-                        console.log(`[INFO] Processing Auto Booking_Create for book_id: ${bookId}`);
-                        
-                        // 예약 등록 API 호출
-                        const apiResult = await sendTo24GolfApi(
-                          'Booking_Create', 
-                          '', 
-                          {}, 
-                          bookingData, 
-                          currentToken, 
-                          processedBookings, 
-                          paymentAmounts, 
-                          paymentStatus
-                        );
-                        
-                        console.log(`[INFO] Processed Auto Booking_Create for book_id: ${bookId}, result:`, apiResult ? JSON.stringify(apiResult) : 'No result');
-                        processedAppBookings.add(bookId);
-                      } catch (error) {
-                        console.error(`[ERROR] Failed to process Auto Booking_Create: ${error.message}`);
-                        console.error(`[ERROR] Error details:`, error);
-                      }
-                    }
-                  } else {
-                    console.log(`[INFO] No new success bookings found for customer ${customerId}`);
-                  }
-                } else {
-                  console.log(`[WARN] Invalid booking list response format or empty results:`, bookingResponse.data);
-                }
-              } catch (axiosError) {
-                console.error(`[ERROR] Failed to fetch booking data with axios: ${axiosError.message}`);
-                if (axiosError.response) {
-                  console.error(`[ERROR] Response status: ${axiosError.response.status}`);
-                  console.error(`[ERROR] Response data:`, axiosError.response.data);
-                } else if (axiosError.request) {
-                  console.error(`[ERROR] No response received, request:`, axiosError.request);
-                }
+              // 캐시된 예약 데이터가 있으면 사용
+              if (bookingDataCache.data && (Date.now() - bookingDataCache.timestamp < 60000)) {
+                console.log(`[INFO] Using cached booking data from ${new Date(bookingDataCache.timestamp).toISOString()}`);
+                processCustomerBookings(customerId, bookingDataCache.data, accessToken, maps, processedBookings, processedAppBookings);
+              } else {
+                console.log(`[INFO] Waiting for next booking data to process customer ${customerId}`);
+                // 다음 예약 데이터가 수신될 때까지 기다림 - 주기적으로 요청되는 데이터
               }
             } catch (e) {
-              console.error(`[ERROR] Failed to check bookings for customer ${customerId}: ${e.message}`);
-              console.error(`[ERROR] Stack trace:`, e.stack);
+              console.error(`[ERROR] Failed to process customer ${customerId} bookings: ${e.message}`);
             } finally {
               // 처리 완료 후 Set에서 제거
               recentCustomerIds.delete(customerId);
@@ -215,12 +81,22 @@ const setupResponseHandler = (page, accessToken, maps) => {
               }, 60000);
               console.log(`[INFO] Removed customer ${customerId} from recent checks after processing`);
             }
-          }, 10000); // 10초 후에 실행
+          }, 10000);
         }
       }
       
       // /owner/booking/ GET 응답 처리 (Getting existing bookings and payment info)
       else if (url.includes('/owner/booking/') && method === 'GET' && status === 200) {
+        const responseJson = await response.json();
+        console.log(`[DEBUG] Received booking data, caching it for future use`);
+        
+        // 예약 데이터 캐싱
+        bookingDataCache = {
+          timestamp: Date.now(),
+          data: responseJson
+        };
+        
+        // 일반 예약 데이터 처리
         await handleBookingListingResponse(response, maps);
         
         // 앱 예약 처리 시도 (최근 업데이트된 고객 정보 기반)
@@ -228,6 +104,12 @@ const setupResponseHandler = (page, accessToken, maps) => {
         
         // After processing booking listing, we need to process any pending booking updates
         await processPendingBookingUpdates(accessToken, maps);
+        
+        // 현재 대기 중인 고객 ID에 대한 예약 처리
+        console.log(`[INFO] Processing ${recentCustomerIds.size} pending customer IDs with fresh booking data`);
+        for (const customerId of recentCustomerIds) {
+          processCustomerBookings(customerId, responseJson, accessToken, maps, processedBookings, processedAppBookings);
+        }
       }
 
       // /owner/revenue/ PATCH 응답 처리 (Payment update)
@@ -286,6 +168,106 @@ const setupResponseHandler = (page, accessToken, maps) => {
       console.error(`[ERROR] Stack trace:`, error.stack);
     }
   });
+};
+
+// 고객별 예약 처리 함수
+const processCustomerBookings = (customerId, bookingData, accessToken, maps, processedBookings, processedAppBookings) => {
+  console.log(`[INFO] Processing bookings for customer ${customerId}`);
+  const { paymentAmounts, paymentStatus } = maps;
+  
+  try {
+    if (!bookingData.results || !Array.isArray(bookingData.results)) {
+      console.log(`[WARN] No booking results found in data`);
+      return;
+    }
+    
+    // 고객 ID에 해당하는 예약만 필터링
+    const customerBookings = bookingData.results.filter(booking => 
+      booking.customer === customerId && 
+      booking.state === 'success' &&
+      !processedBookings.has(booking.book_id) &&
+      !processedAppBookings.has(booking.book_id)
+    );
+    
+    console.log(`[INFO] Found ${customerBookings.length} success bookings for customer ${customerId}`);
+    
+    if (customerBookings.length > 0) {
+      // 최신 업데이트 순으로 정렬
+      customerBookings.sort((a, b) => {
+        const aDate = new Date(a.customer_detail?.customerinfo_set?.[0]?.upd_date || 0);
+        const bDate = new Date(b.customer_detail?.customerinfo_set?.[0]?.upd_date || 0);
+        return bDate - aDate;
+      });
+      
+      // 최신 예약 처리
+      for (const booking of customerBookings) {
+        const bookId = booking.book_id;
+        console.log(`[DEBUG] Processing booking: ${bookId}`);
+        
+        // 결제 정보 가져오기
+        const revenueDetail = booking.revenue_detail || {};
+        const amount = parseInt(revenueDetail.amount || booking.amount || 0, 10);
+        
+        // 결제 완료 여부 확인 (finished가 true인 경우에만 true)
+        const finished = revenueDetail.finished === true || revenueDetail.finished === 'true';
+        
+        console.log(`[DEBUG] Booking info - book_id: ${bookId}, customer: ${booking.customer}, state: ${booking.state}`);
+        console.log(`[DEBUG] Extracted payment info for book_id ${bookId}: amount=${amount}, finished=${finished}, revenue_detail:`, JSON.stringify(revenueDetail));
+        
+        // 맵에 저장
+        paymentAmounts.set(bookId, amount);
+        paymentStatus.set(bookId, finished);
+        
+        // 예약 처리
+        const bookingData = {
+          externalId: bookId,
+          name: booking.name || 'Unknown',
+          phone: booking.phone || '010-0000-0000',
+          partySize: parseInt(booking.person || 1, 10),
+          startDate: booking.start_datetime,
+          endDate: booking.end_datetime,
+          roomId: booking.room?.toString() || 'unknown',
+          hole: booking.hole,
+          paymented: finished,
+          paymentAmount: amount,
+          crawlingSite: 'KimCaddie',
+          immediate: booking.immediate_booked || false
+        };
+        
+        try {
+          // 유효한 토큰 확인
+          let currentToken = accessToken;
+          if (!currentToken) {
+            console.log(`[DEBUG] No access token available, fetching new one`);
+            currentToken = getAccessToken();
+          }
+          
+          console.log(`[INFO] Processing Auto Booking_Create for book_id: ${bookId}`);
+          
+          // 예약 등록 API 호출
+          sendTo24GolfApi(
+            'Booking_Create', 
+            '', 
+            {}, 
+            bookingData, 
+            currentToken, 
+            processedBookings, 
+            paymentAmounts, 
+            paymentStatus
+          );
+          
+          console.log(`[INFO] Requested Auto Booking_Create for book_id: ${bookId}`);
+          processedAppBookings.add(bookId);
+        } catch (error) {
+          console.error(`[ERROR] Failed to process Auto Booking_Create: ${error.message}`);
+        }
+      }
+    } else {
+      console.log(`[INFO] No new success bookings found for customer ${customerId}`);
+    }
+  } catch (e) {
+    console.error(`[ERROR] Failed to process customer bookings: ${e.message}`);
+  }
 };
 
 // 고객 정보 응답 처리 (앱 예약 감지용)
