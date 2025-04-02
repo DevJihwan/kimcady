@@ -77,6 +77,7 @@ const getStoreInfo = async (storeId) => {
 
 // 24golf API에서 허용하는 필드만 추출하는 함수
 const extractAllowedFields = (data) => {
+  // 엄격하게 허용된 필드만 포함
   const allowedFields = [
     'externalId',
     'name',
