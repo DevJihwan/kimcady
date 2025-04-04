@@ -162,6 +162,30 @@ const sendTo24GolfApi = async (type, url, payload, response, accessToken, proces
   let paymentAmount = paymentAmounts.get(bookId) || 0;
   let isPaymentCompleted = paymentStatus.get(bookId) || false;
   
+  // 중요: 이미 apiData에 paymentAmount 값이 있는지 확인 (점주 예약)
+  if (response && typeof response === 'object') {
+    // response가 apiData일 가능성이 있음
+    if (response.paymentAmount !== undefined) {
+      const amount = parseInt(response.paymentAmount, 10);
+      if (amount > 0) {
+        paymentAmount = amount;
+        console.log(`[INFO] Using payment amount ${paymentAmount} from apiData for book_id: ${bookId}`);
+      }
+    }
+  }
+  
+  // payload에서 금액 추출 (가장 우선순위 높음)
+  if (payload && typeof payload === 'object') {
+    if (payload.amount && payload.amount !== 'undefined') {
+      const amount = parseInt(payload.amount, 10);
+      if (amount > 0) {
+        paymentAmount = amount;
+        console.log(`[INFO] Found amount ${paymentAmount} in request payload for book_id: ${bookId}`);
+        paymentAmounts.set(bookId, paymentAmount);
+      }
+    }
+  }
+  
   // 앱 예약인 경우 response에서 결제 정보 추가 확인
   if (response && type === 'Booking_Create') {
     // response.paymentAmount가 있다면 그 값을 사용
