@@ -158,59 +158,53 @@ const sendTo24GolfApi = async (type, url, payload, response, accessToken, proces
   }
 
   // 결제 정보 로깅 및 확인
-  // 항상 저장된 맵에서 결제 정보를 가져옴
-  let paymentAmount = paymentAmounts.get(bookId) || 0;
-  let isPaymentCompleted = paymentStatus.get(bookId) || false;
+  // 핵심 변경: 결제 정보 우선순위 조정
+  // 1. 직접 response 객체에서 설정된 값 확인 (가장 우선순위 높음)
+  // 2. paymentAmounts, paymentStatus 맵에서 확인
+  // 3. 없으면 기본값 사용
   
-  // 중요: 이미 apiData에 paymentAmount 값이 있는지 확인 (점주 예약)
+  // 기본값 설정
+  let paymentAmount = 0;
+  let isPaymentCompleted = false;
+  
+  // 1. response 객체에서 결제 정보 확인
   if (response && typeof response === 'object') {
-    // response가 apiData일 가능성이 있음
+    // paymentAmount 확인
     if (response.paymentAmount !== undefined) {
       const amount = parseInt(response.paymentAmount, 10);
       if (amount > 0) {
         paymentAmount = amount;
-        console.log(`[INFO] Using payment amount ${paymentAmount} from apiData for book_id: ${bookId}`);
+        console.log(`[INFO] Using payment amount ${paymentAmount} from response object for book_id: ${bookId}`);
       }
-    }
-  }
-  
-  // payload에서 금액 추출 (가장 우선순위 높음)
-  if (payload && typeof payload === 'object') {
-    if (payload.amount && payload.amount !== 'undefined') {
-      const amount = parseInt(payload.amount, 10);
+    } else if (response.amount !== undefined) {
+      const amount = parseInt(response.amount, 10);
       if (amount > 0) {
         paymentAmount = amount;
-        console.log(`[INFO] Found amount ${paymentAmount} in request payload for book_id: ${bookId}`);
-        paymentAmounts.set(bookId, paymentAmount);
+        console.log(`[INFO] Using amount ${paymentAmount} from response object for book_id: ${bookId}`);
       }
     }
-  }
-  
-  // 앱 예약인 경우 response에서 결제 정보 추가 확인
-  if (response && type === 'Booking_Create') {
-    // response.paymentAmount가 있다면 그 값을 사용
-    if (response.paymentAmount !== undefined && parseInt(response.paymentAmount, 10) > 0) {
-      paymentAmount = parseInt(response.paymentAmount, 10);
-      console.log(`[INFO] Using payment amount ${paymentAmount} from response object for book_id: ${bookId}`);
-      paymentAmounts.set(bookId, paymentAmount);
-    }
     
-    // response.amount가 있다면 그 값을 사용
-    else if (response.amount !== undefined && parseInt(response.amount, 10) > 0) {
-      paymentAmount = parseInt(response.amount, 10);
-      console.log(`[INFO] Using amount ${paymentAmount} from response object for book_id: ${bookId}`);
-      paymentAmounts.set(bookId, paymentAmount);
-    }
-    
-    // 이미 response.paymented 값이 있으면 그 값을 사용
+    // paymented 상태 확인
     if (response.paymented !== undefined) {
       isPaymentCompleted = response.paymented;
-      paymentStatus.set(bookId, isPaymentCompleted);
       console.log(`[INFO] Using payment status ${isPaymentCompleted} from response.paymented for book_id: ${bookId}`);
     }
   }
   
-  console.log(`[DEBUG] Payment info from maps for ${bookId} - Amount: ${paymentAmount}, Completed: ${isPaymentCompleted}`);
+  // 2. 맵에서 결제 정보 확인 (맵에 저장된 값이 있다면 response 값보다 우선함)
+  const mapAmount = paymentAmounts.get(bookId);
+  if (mapAmount !== undefined && mapAmount > 0) {
+    paymentAmount = mapAmount;
+    console.log(`[INFO] Using payment amount ${paymentAmount} from maps for book_id: ${bookId}`);
+  }
+  
+  const mapStatus = paymentStatus.get(bookId);
+  if (mapStatus !== undefined) {
+    isPaymentCompleted = mapStatus;
+    console.log(`[INFO] Using payment status ${isPaymentCompleted} from maps for book_id: ${bookId}`);
+  }
+  
+  console.log(`[DEBUG] Payment info for ${bookId} - Amount: ${paymentAmount}, Completed: ${isPaymentCompleted}`);
 
   const timestamp = new Date().toISOString();
   console.log(`[${timestamp}] ${type} - URL: ${url} - Payload:`, JSON.stringify(payload, null, 2));
@@ -310,29 +304,42 @@ const sendTo24GolfApi = async (type, url, payload, response, accessToken, proces
     apiMethod = 'PATCH';
     apiUrl = `${API_BASE_URL}/stores/${storeId}/reservation/crawl`;
     
-    let startDateTime = null;
-    if (payload.start_datetime) {
-      startDateTime = convertKSTtoUTC(payload.start_datetime);
+    if (response && response.externalId && (response.paymentAmount !== undefined || response.paymented !== undefined)) {
+      // 결제 정보만 업데이트하는 경우
+      apiData = {
+        externalId: response.externalId,
+        paymentAmount: paymentAmount,
+        paymented: isPaymentCompleted,
+        crawlingSite: 'KimCaddie'
+      };
+      
+      console.log(`[INFO] Payment-only update for book_id: ${response.externalId}`);
     } else {
-      startDateTime = new Date().toISOString();
+      // 일반 예약 정보 업데이트
+      let startDateTime = null;
+      if (payload.start_datetime) {
+        startDateTime = convertKSTtoUTC(payload.start_datetime);
+      } else {
+        startDateTime = new Date().toISOString();
+      }
+      
+      const tempData = {
+        externalId: bookId,
+        name: payload.name || 'Unknown',
+        phone: payload.phone || '010-0000-0000',
+        partySize: parseInt(payload.person || 1, 10),
+        startDate: startDateTime,
+        endDate: payload.end_datetime ? 
+                 convertKSTtoUTC(payload.end_datetime) : 
+                 calculateEndTime(startDateTime),
+        roomId: payload.room_id || payload.room || 'unknown',
+        paymented: isPaymentCompleted,
+        paymentAmount,
+        crawlingSite: 'KimCaddie'
+      };
+      
+      apiData = extractAllowedFields(tempData);
     }
-    
-    const tempData = {
-      externalId: bookId,
-      name: payload.name || 'Unknown',
-      phone: payload.phone || '010-0000-0000',
-      partySize: parseInt(payload.person || 1, 10),
-      startDate: startDateTime,
-      endDate: payload.end_datetime ? 
-               convertKSTtoUTC(payload.end_datetime) : 
-               calculateEndTime(startDateTime),
-      roomId: payload.room_id || payload.room || 'unknown',
-      paymented: isPaymentCompleted,
-      paymentAmount,
-      crawlingSite: 'KimCaddie'
-    };
-    
-    apiData = extractAllowedFields(tempData);
   } else if (type === 'Booking_Cancel') {
     apiMethod = 'DELETE';
     apiUrl = `${API_BASE_URL}/stores/${storeId}/reservation/crawl`;
@@ -344,23 +351,6 @@ const sendTo24GolfApi = async (type, url, payload, response, accessToken, proces
   } else {
     console.log(`[WARN] Unknown type: ${type}, skipping API call`);
     return;
-  }
-
-  // 최종 결제 정보 업데이트 (paymentAmounts, paymentStatus의 최신 값만 사용)
-  if ((type === 'Booking_Create' || type === 'Booking_Update') && apiData) {
-    const currentAmount = paymentAmounts.get(bookId);
-    const currentStatus = paymentStatus.get(bookId);
-    
-    // 맵에 저장된 값이 있으면 사용, 없으면 이미 설정된 값 사용
-    if (currentAmount !== undefined && currentAmount > 0) {
-      apiData.paymentAmount = currentAmount;
-    }
-    
-    if (currentStatus !== undefined) {
-      apiData.paymented = currentStatus;
-    }
-    
-    console.log(`[DEBUG] Final payment values for ${bookId}: Amount=${apiData.paymentAmount}, Completed=${apiData.paymented}`);
   }
 
   console.log(`[DEBUG] ${type} API data:`, JSON.stringify(apiData, null, 2));
