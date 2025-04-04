@@ -133,6 +133,20 @@ const setupRequestHandler = (page, accessToken, maps) => {
           
           console.log(`[INFO] Processing Manager Booking_Create: ${JSON.stringify(apiData, null, 2)}`);
           
+          // 실제 API 호출 - 이 부분이 누락되었던 것!
+          await sendTo24GolfApi(
+            'Booking_Create',
+            url,
+            payload,
+            apiData,
+            currentToken,
+            processedBookings,
+            paymentAmounts,
+            paymentStatus
+          );
+          
+          console.log(`[INFO] Sent Manager Booking_Create to 24Golf API`);
+          
           // tempBookId를 키로 사용해 requestMap에 저장
           requestMap.set(tempBookId, { 
             url, 
@@ -144,7 +158,7 @@ const setupRequestHandler = (page, accessToken, maps) => {
           
           // 응답 처리는 response 핸들러에서 실행됨
         } catch (error) {
-          console.error(`[ERROR] Failed to prepare Manager Booking_Create: ${error.message}`);
+          console.error(`[ERROR] Failed to process Manager Booking_Create: ${error.message}`);
         }
       }
       
