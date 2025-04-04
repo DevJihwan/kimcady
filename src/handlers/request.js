@@ -3,6 +3,8 @@ const { sendTo24GolfApi, getAccessToken, convertKSTtoUTC } = require('../utils/a
 
 // 점주 예약 생성 및 결제 정보 처리를 위한 맵
 const pendingBookingMap = new Map();
+// 예약 생성 응답 후 API 호출 완료 여부 추적 
+const processedApiCallMap = new Map();
 
 const setupRequestHandler = (page, accessToken, maps) => {
   const { requestMap, processedBookings, paymentAmounts, paymentStatus, bookIdToIdxMap, revenueToBookingMap, bookingDataMap } = maps;
@@ -258,19 +260,40 @@ const setupRequestHandler = (page, accessToken, maps) => {
           
           console.log(`[INFO] Received booking creation response with book_id: ${bookId}, idx: ${bookIdx}`);
           
-          // 결제 정보 찾기
+          // 이미 처리된 API 호출인지 확인
+          if (processedApiCallMap.has(bookId)) {
+            console.log(`[INFO] Already processed API call for book_id: ${bookId}, skipping`);
+            return;
+          }
+          
+          // 1. 먼저 book_idx가 있다면 해당하는 결제 정보 찾기
           let amount = 0;
           let finished = false;
+          let foundPaymentInfo = false;
           
-          // 1. bookIdx가 있으면 해당 결제 정보 찾기
           if (bookIdx) {
             const paymentUpdateKey = `paymentUpdate_${bookIdx}`;
             const paymentInfo = requestMap.get(paymentUpdateKey);
             
-            if (paymentInfo && paymentInfo.amount) {
+            if (paymentInfo && paymentInfo.amount !== undefined) {
               amount = paymentInfo.amount;
-              finished = paymentInfo.finished;
-              console.log(`[INFO] Found payment info for book_idx ${bookIdx}: amount=${amount}, finished=${finished}`);
+              finished = paymentInfo.finished || false;
+              foundPaymentInfo = true;
+              console.log(`[INFO] Found payment info via paymentUpdate for book_idx ${bookIdx}: amount=${amount}, finished=${finished}`);
+            }
+          }
+          
+          // 2. GET /owner/booking/ 응답이 있는지 확인
+          if (!foundPaymentInfo) {
+            // bookIdx로 결제 정보 매핑이 있는지 확인
+            for (const [key, value] of requestMap.entries()) {
+              if (key.startsWith('revenueUpdate_') && value.bookIdx === bookIdx) {
+                amount = value.amount || 0;
+                finished = value.finished || false;
+                foundPaymentInfo = true;
+                console.log(`[INFO] Found payment info via revenueUpdate for book_idx ${bookIdx}: amount=${amount}, finished=${finished}`);
+                break;
+              }
             }
           }
           
@@ -291,6 +314,12 @@ const setupRequestHandler = (page, accessToken, maps) => {
                 let currentToken = accessToken;
                 if (!currentToken) {
                   currentToken = await getAccessToken();
+                }
+                
+                // 3. 결제 정보가 아직 없다면, GET /owner/booking/ 호출 전 5초 대기
+                if (!foundPaymentInfo) {
+                  console.log(`[INFO] No payment info found yet, waiting for GET /owner/booking/ to fetch more data...`);
+                  await new Promise(resolve => setTimeout(resolve, 1000)); // 1초 대기
                 }
                 
                 // API 데이터 준비
@@ -324,6 +353,9 @@ const setupRequestHandler = (page, accessToken, maps) => {
                 );
                 
                 console.log(`[INFO] Successfully sent booking with real book_id: ${bookId}, amount: ${amount}`);
+                
+                // 처리 완료 표시
+                processedApiCallMap.set(bookId, true);
                 
                 // 처리 완료 후 제거
                 pendingBookingMap.delete(latestKey);
@@ -368,8 +400,20 @@ const setupRequestHandler = (page, accessToken, maps) => {
       pendingBookingMap.delete(key);
     }
     
-    if (keysToDelete.length > 0 || pendingKeysToDelete.length > 0) {
-      console.log(`[INFO] Cleaned up ${keysToDelete.length} request entries and ${pendingKeysToDelete.length} pending booking entries`);
+    // 오래된 processedApiCallMap 항목 제거
+    const processedKeysToDelete = [];
+    for (const [key, value] of processedApiCallMap.entries()) {
+      if ((now - value.timestamp) > 3600000) {
+        processedKeysToDelete.push(key);
+      }
+    }
+    
+    for (const key of processedKeysToDelete) {
+      processedApiCallMap.delete(key);
+    }
+    
+    if (keysToDelete.length > 0 || pendingKeysToDelete.length > 0 || processedKeysToDelete.length > 0) {
+      console.log(`[INFO] Cleaned up ${keysToDelete.length} request entries, ${pendingKeysToDelete.length} pending booking entries, and ${processedKeysToDelete.length} processed API calls`);
     }
   }, 60 * 60 * 1000); // 1시간마다
   
