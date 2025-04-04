@@ -1,5 +1,5 @@
 // services/bookingService.js
-const { sendTo24GolfApi, getAccessToken } = require('../utils/api');
+const { sendTo24GolfApi, getAccessToken, convertKSTtoUTC } = require('../utils/api');
 const { parseMultipartFormData } = require('../utils/parser');
 const { handleBookingListingResponse, handleBookingCreateResponse, processPendingBookingUpdates } = require('../handlers/response-helpers');
 
@@ -48,11 +48,39 @@ class BookingService {
       const finalAmount = this.maps.paymentAmounts.get(bookId) || amount;
       console.log(`[INFO] Using final payment amount for book_id ${bookId}: ${finalAmount} (initial amount was: ${amount})`);
       
+      // 날짜 형식 변환 (KST -> UTC)
+      let startDate = bookingInfo.start_datetime;
+      let endDate = bookingInfo.end_datetime;
+      
+      if (startDate) {
+        startDate = convertKSTtoUTC(startDate);
+        console.log(`[DEBUG] Converted startDate to UTC: ${startDate}`);
+      }
+      
+      if (endDate) {
+        endDate = convertKSTtoUTC(endDate);
+        console.log(`[DEBUG] Converted endDate to UTC: ${endDate}`);
+      }
+      
       // 예약 데이터 준비
-      const apiData = this._prepareBookingData(payload, bookingInfo, finalAmount, finished);
+      const apiData = {
+        externalId: bookId,
+        name: bookingInfo.name || payload.name || 'Unknown',
+        phone: bookingInfo.phone || payload.phone || '010-0000-0000',
+        partySize: parseInt(bookingInfo.person || payload.person || 1, 10),
+        startDate: startDate,
+        endDate: endDate,
+        roomId: payload.room || bookingInfo.room || 'unknown',
+        hole: bookingInfo.hole || '9',
+        paymented: finished,
+        paymentAmount: finalAmount,  // 중요: finalAmount 사용
+        crawlingSite: 'KimCaddie',
+        immediate: false
+      };
       
       // 로그 추가 - 최종 결제 금액 확인
       console.log(`[DEBUG] Final API payment amount for ${bookId}: ${apiData.paymentAmount}`);
+      console.log(`[DEBUG] UTC times - Start: ${apiData.startDate}, End: ${apiData.endDate}`);
       
       await this._createBooking(apiData);
       this.processedAppBookings.add(bookId);
@@ -173,14 +201,18 @@ class BookingService {
             this.maps.paymentAmounts.set(bookId, amount);
             this.maps.paymentStatus.set(bookId, finished);
             
+            // 날짜 형식 변환 (KST -> UTC)
+            let startDate = booking.start_datetime ? convertKSTtoUTC(booking.start_datetime) : null;
+            let endDate = booking.end_datetime ? convertKSTtoUTC(booking.end_datetime) : null;
+            
             // 예약 데이터 준비
             const apiData = {
               externalId: bookId,
               name: booking.name || 'Unknown',
               phone: booking.phone || '010-0000-0000',
               partySize: parseInt(booking.person || 1, 10),
-              startDate: booking.start_datetime,
-              endDate: booking.end_datetime,
+              startDate: startDate,
+              endDate: endDate,
               roomId: booking.room?.toString() || 'unknown',
               hole: booking.hole,
               paymented: finished,
@@ -188,6 +220,8 @@ class BookingService {
               crawlingSite: 'KimCaddie',
               immediate: isImmediateBooking
             };
+            
+            console.log(`[DEBUG] UTC times for app booking - Start: ${startDate}, End: ${endDate}`);
             
             try {
               console.log(`[INFO] Processing App Booking_Create for book_id: ${bookId}`);
@@ -203,13 +237,17 @@ class BookingService {
   }
 
   _prepareBookingData(payload, bookingInfo, finalAmount, finished) {
+    // 날짜 형식 변환 (KST -> UTC)
+    let startDate = bookingInfo.start_datetime ? convertKSTtoUTC(bookingInfo.start_datetime) : null;
+    let endDate = bookingInfo.end_datetime ? convertKSTtoUTC(bookingInfo.end_datetime) : null;
+    
     return {
       externalId: payload.book_id,
       name: bookingInfo.name || payload.name || 'Unknown',
       phone: bookingInfo.phone || payload.phone || '010-0000-0000',
       partySize: parseInt(bookingInfo.person || payload.person || 1, 10),
-      startDate: bookingInfo.start_datetime,
-      endDate: bookingInfo.end_datetime,
+      startDate: startDate,
+      endDate: endDate,
       roomId: payload.room || bookingInfo.room || 'unknown',
       hole: bookingInfo.hole || '9',
       paymented: finished,
