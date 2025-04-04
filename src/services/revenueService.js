@@ -1,6 +1,6 @@
 // services/revenueService.js
 const { parseMultipartFormData } = require('../utils/parser');
-const { extractRevenueId, findBookIdByRevenueIdOrBookIdx, handleRevenueResponse } = require('../handlers/response-helpers');
+const { extractRevenueId, findBookIdByRevenueIdOrBookIdx } = require('../handlers/response-helpers');
 const { sendTo24GolfApi, getAccessToken } = require('../utils/api');
 
 class RevenueService {
@@ -33,17 +33,6 @@ class RevenueService {
       this.maps.paymentStatus.set(bookId, revenueData.finished);
       console.log(`[INFO] Updated payment for book_id ${bookId}: amount=${revenueData.amount}, finished=${revenueData.finished}`);
       
-      // 중요: 최근 생성된 예약에 대한 결제 정보 업데이트를 즉시 시도
-      const pendingBooking = this.maps.bookingDataMap.get(bookId);
-      const isRecentBooking = pendingBooking && 
-                            (pendingBooking.type === 'Booking_Create' || pendingBooking.type === 'Booking_Create_Pending') && 
-                            (Date.now() - pendingBooking.timestamp < 30000); // 30초 이내 생성된 예약
-      
-      if (isRecentBooking && revenueData.amount > 0) {
-        // 즉시 결제 정보 업데이트 시도
-        this.updatePaymentInfo(bookId, revenueData.amount, revenueData.finished);
-      }
-      
       // 결제 정보 업데이트 데이터 저장 (보류 중인 처리를 위해)
       const revenueKey = `revenueUpdate_${revenueId}`;
       this.maps.requestMap.set(revenueKey, {
@@ -55,6 +44,23 @@ class RevenueService {
         timestamp: Date.now()
       });
     } else {
+      // 중요: 현재 생성 중인 예약이 있다면 결제 정보 업데이트
+      const pendingBookings = this.findPendingBookings();
+      if (pendingBookings.length > 0) {
+        console.log(`[INFO] Found ${pendingBookings.length} pending bookings, updating with payment info`);
+        for (const pendingKey of pendingBookings) {
+          const bookingData = this.maps.requestMap.get(pendingKey);
+          if (bookingData) {
+            bookingData.paymentAmount = revenueData.amount;
+            bookingData.paymentFinished = revenueData.finished;
+            bookingData.paymentTimestamp = Date.now();
+            
+            console.log(`[INFO] Updated pending booking ${pendingKey} with payment amount ${revenueData.amount}`);
+            this.maps.requestMap.set(pendingKey, bookingData);
+          }
+        }
+      }
+      
       // Store this data temporarily to use after we get booking data
       console.log(`[DEBUG] Storing revenue update data for revenue ID ${revenueId}, bookIdx ${payload.book_idx}: amount=${revenueData.amount}, finished=${revenueData.finished}`);
       
@@ -72,79 +78,80 @@ class RevenueService {
   }
 
   async handleRevenueCreation(response, request) {
-    const revenueData = await handleRevenueResponse(response, request, this.maps);
-    
-    // 결제 정보가 업데이트된 후 pending 상태의 예약 처리가 있으면 다시 시도
-    if (revenueData && revenueData.bookId) {
-      const pendingBooking = this.maps.bookingDataMap.get(`pendingUpdate_${revenueData.bookId}`);
-      if (pendingBooking && pendingBooking.type === 'Booking_Update_Pending') {
-        console.log(`[INFO] Processing pending Booking_Update for book_id ${revenueData.bookId} after payment update`);
-        
-        try {
-          // 여기서 보류 중인 예약 업데이트 처리 로직을 구현
-          if (revenueData.amount > 0) {
-            this.updatePaymentInfo(revenueData.bookId, revenueData.amount, revenueData.finished);
-          }
-        } catch (error) {
-          console.error(`[ERROR] Failed to process pending booking update: ${error.message}`);
-        }
-      } else {
-        // 일반 예약인 경우 결제 정보 업데이트 시도
-        const basicBooking = this.maps.bookingDataMap.get(revenueData.bookId);
-        if (basicBooking && revenueData.amount > 0) {
-          console.log(`[INFO] Processing payment update for book_id ${revenueData.bookId} after revenue creation`);
-          
-          try {
-            this.updatePaymentInfo(revenueData.bookId, revenueData.amount, revenueData.finished);
-          } catch (error) {
-            console.error(`[ERROR] Failed to update payment information: ${error.message}`);
-          }
+    try {
+      const payload = parseMultipartFormData(request.postData());
+      if (!payload?.book_idx || !payload?.amount) return;
+      
+      const bookIdx = payload.book_idx;
+      const amount = parseInt(payload.amount, 10) || 0;
+      const finished = payload.finished === 'true';
+      
+      console.log(`[INFO] Revenue creation detected: book_idx=${bookIdx}, amount=${amount}, finished=${finished}`);
+      
+      // 먼저 이미 매핑된 book_id가 있는지 확인
+      let bookId = null;
+      for (const [id, idx] of this.maps.bookIdToIdxMap.entries()) {
+        if (idx === bookIdx) {
+          bookId = id;
+          break;
         }
       }
+      
+      if (bookId) {
+        // 이미 존재하는 예약에 결제 정보 업데이트
+        this.maps.paymentAmounts.set(bookId, amount);
+        this.maps.paymentStatus.set(bookId, finished);
+        console.log(`[INFO] Updated payment for existing book_id ${bookId}: amount=${amount}, finished=${finished}`);
+      } else {
+        // 아직 예약이 생성되지 않았거나 매핑되지 않은 경우, 임시 저장
+        console.log(`[INFO] No matching book_id found for book_idx ${bookIdx}, storing payment info for later`);
+        
+        // 보류 중인 예약 생성이 있는지 확인
+        const pendingBookings = this.findPendingBookings();
+        if (pendingBookings.length > 0) {
+          console.log(`[INFO] Found ${pendingBookings.length} pending bookings, updating with payment info`);
+          for (const pendingKey of pendingBookings) {
+            const bookingData = this.maps.requestMap.get(pendingKey);
+            if (bookingData) {
+              bookingData.paymentAmount = amount;
+              bookingData.paymentFinished = finished;
+              bookingData.bookIdx = bookIdx;  // 중요: book_idx 연결
+              bookingData.paymentTimestamp = Date.now();
+              
+              console.log(`[INFO] Updated pending booking ${pendingKey} with payment amount ${amount}`);
+              this.maps.requestMap.set(pendingKey, bookingData);
+            }
+          }
+        }
+        
+        // 결제 정보 저장
+        this.maps.requestMap.set(`paymentUpdate_${bookIdx}`, {
+          bookIdx,
+          amount,
+          finished,
+          processed: false,
+          timestamp: Date.now()
+        });
+      }
+    } catch (e) {
+      console.error(`[ERROR] Failed to process revenue creation: ${e.message}`);
     }
   }
   
-  // 결제 정보만 업데이트하는 새로운 메서드
-  async updatePaymentInfo(bookId, amount, finished) {
-    if (!bookId || !amount) return;
+  // 보류 중인 예약 찾기
+  findPendingBookings() {
+    const pendingBookings = [];
+    const now = Date.now();
     
-    console.log(`[INFO] Attempting to update payment information for book_id ${bookId}: amount=${amount}, finished=${finished}`);
-    
-    try {
-      // 액세스 토큰 확인
-      let currentToken = this.accessToken;
-      if (!currentToken) {
-        try {
-          currentToken = await getAccessToken();
-        } catch (err) {
-          console.error(`[ERROR] Failed to get token for payment update: ${err.message}`);
-          return;
-        }
+    for (const [key, data] of this.maps.requestMap.entries()) {
+      if (key.startsWith('bookingCreate_') && 
+          data.tempBookId && 
+          (now - data.timestamp < 10000)) { // 10초 이내 생성된 예약
+        pendingBookings.push(key);
       }
-      
-      // 결제 정보만 포함한 업데이트 페이로드
-      const updatePayload = {
-        externalId: bookId,
-        paymentAmount: amount,
-        paymented: finished
-      };
-      
-      // 결제 정보 업데이트 API 호출
-      await sendTo24GolfApi(
-        'Booking_Update',
-        `payment_update_${bookId}`,
-        { externalId: bookId },
-        updatePayload,
-        currentToken,
-        null,
-        this.maps.paymentAmounts,
-        this.maps.paymentStatus
-      );
-      
-      console.log(`[INFO] Successfully updated payment information for book_id ${bookId}`);
-    } catch (error) {
-      console.error(`[ERROR] Failed to update payment information: ${error.message}`);
     }
+    
+    return pendingBookings;
   }
 }
 
