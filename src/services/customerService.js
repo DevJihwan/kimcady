@@ -1,5 +1,5 @@
 // services/customerService.js
-const { sendTo24GolfApi, getAccessToken } = require('../utils/api');
+const { sendTo24GolfApi, getAccessToken, convertKSTtoUTC } = require('../utils/api');
 
 class CustomerService {
   constructor(maps, accessToken, processedCustomerRequests, bookingDataCache) {
@@ -136,14 +136,20 @@ class CustomerService {
           paymentAmounts.set(bookId, amount);
           paymentStatus.set(bookId, finished);
           
+          // 날짜 변환 (KST -> UTC)
+          const startDate = booking.start_datetime ? convertKSTtoUTC(booking.start_datetime) : null;
+          const endDate = booking.end_datetime ? convertKSTtoUTC(booking.end_datetime) : null;
+          
+          console.log(`[DEBUG] UTC times - Start: ${startDate}, End: ${endDate}`);
+          
           // 예약 처리 데이터 준비
           const bookingData = {
             externalId: bookId,
             name: booking.name || 'Unknown',
             phone: booking.phone || '010-0000-0000',
             partySize: parseInt(booking.person || 1, 10),
-            startDate: booking.start_datetime,
-            endDate: booking.end_datetime,
+            startDate: startDate,
+            endDate: endDate,
             roomId: booking.room?.toString() || 'unknown',
             hole: booking.hole,
             paymented: finished,
