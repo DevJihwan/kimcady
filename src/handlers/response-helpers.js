@@ -33,6 +33,60 @@ const processPendingBookingUpdates = async (accessToken, maps) => {
       }
     }
   }
+  
+  // 새로 추가: 결제 정보만 업데이트된 예약 처리
+  console.log('[INFO] Processing bookings with updated payment information');
+  const { paymentAmounts, paymentStatus, bookIdToIdxMap } = maps;
+  const processedIds = new Set();
+  
+  // 최근 결제 정보 업데이트 확인 (revenueUpdate_로 시작하는 키)
+  for (const [key, data] of requestMap.entries()) {
+    if (key.startsWith('revenueUpdate_') && data.bookId && !processedIds.has(data.bookId)) {
+      const bookId = data.bookId;
+      const amount = data.amount || 0;
+      const finished = data.finished || false;
+      const timestamp = data.timestamp || 0;
+      
+      // 최근 5분 이내의 업데이트만 처리 (오래된 데이터는 무시)
+      if ((Date.now() - timestamp) < 300000) {
+        console.log(`[INFO] Processing payment update for book_id ${bookId}: amount=${amount}, finished=${finished}`);
+        
+        try {
+          // 업데이트 페이로드 생성
+          const payload = {
+            externalId: bookId,
+            paymentAmount: amount,
+            paymented: finished
+          };
+          
+          // API 호출
+          let currentToken = accessToken;
+          if (!currentToken) {
+            currentToken = await getAccessToken();
+          }
+          
+          await sendTo24GolfApi(
+            'Booking_Update', 
+            `payment_update_${bookId}`, 
+            { externalId: bookId },
+            payload, 
+            currentToken, 
+            null,
+            paymentAmounts, 
+            paymentStatus
+          );
+          
+          console.log(`[INFO] Successfully updated payment for book_id ${bookId}`);
+          processedIds.add(bookId);
+          
+          // 처리 완료 후 맵에서 제거
+          requestMap.delete(key);
+        } catch (error) {
+          console.error(`[ERROR] Failed to update payment for book_id ${bookId}: ${error.message}`);
+        }
+      }
+    }
+  }
 };
 
 // Process a single booking update
@@ -144,7 +198,9 @@ const handleBookingListingResponse = async (response, maps) => {
       const finished = revenueDetail.finished === true || revenueDetail.finished === 'true';
 
       // Store mappings
-      revenueToBookingMap.set(revenueId, bookId);
+      if (revenueId) {
+        revenueToBookingMap.set(revenueId, bookId);
+      }
       bookIdToIdxMap.set(bookId, bookIdx);
       
       // Check if we have any pending revenue updates for this revenue ID
@@ -158,8 +214,9 @@ const handleBookingListingResponse = async (response, maps) => {
         paymentAmounts.set(bookId, pendingRevenue.amount);
         paymentStatus.set(bookId, pendingRevenue.finished);
         
-        // Clean up temporary data
-        requestMap.delete(tmpRevenueKey);
+        // 중요: 이제 book_idx와 bookId를 연결하여 저장
+        pendingRevenue.bookId = bookId;
+        requestMap.set(tmpRevenueKey, pendingRevenue);
       } else {
         // Use the data from the booking listing
         paymentAmounts.set(bookId, parseInt(amount, 10) || 0);
@@ -167,14 +224,68 @@ const handleBookingListingResponse = async (response, maps) => {
       }
 
       console.log(`[INFO] Mapped revenue ${revenueId} to book_id ${bookId}, amount: ${paymentAmounts.get(bookId)}, finished: ${paymentStatus.get(bookId)}, idx: ${bookIdx}`);
+      
+      // 중요: book_idx로도 매핑 저장 (향후 결제 정보 업데이트에 필요)
+      if (bookIdx) {
+        requestMap.set(`bookIdx_${bookIdx}`, { bookId, timestamp: Date.now() });
+      }
     }
+    
+    // 바로 페이먼트 업데이트 처리
+    processPendingPaymentUpdates(maps);
   } catch (e) {
     console.error(`[ERROR] Failed to parse /owner/booking/ response: ${e.message}`);
   }
 };
 
+// 새 함수: 보류 중인 결제 정보 처리
+const processPendingPaymentUpdates = (maps) => {
+  const { requestMap, bookIdToIdxMap } = maps;
+  
+  // 모든 결제 정보 업데이트 찾기
+  for (const [key, data] of requestMap.entries()) {
+    // book_idx를 기반으로 한 결제 정보 업데이트 검색
+    if (key.startsWith('paymentUpdate_') && data.bookIdx && !data.processed) {
+      const bookIdx = data.bookIdx;
+      
+      // bookIdx를 통해 bookId 찾기
+      let bookId = null;
+      for (const [id, idx] of bookIdToIdxMap.entries()) {
+        if (idx === bookIdx) {
+          bookId = id;
+          break;
+        }
+      }
+      
+      if (bookId) {
+        console.log(`[INFO] Found matching book_id ${bookId} for book_idx ${bookIdx} in pending payment update`);
+        
+        // 해당 bookId로 revenueUpdate_를 생성하거나 업데이트
+        const revenueKey = `revenueUpdate_${data.revenueId || 'unknown'}`;
+        
+        requestMap.set(revenueKey, {
+          bookId,
+          bookIdx,
+          revenueId: data.revenueId,
+          amount: data.amount,
+          finished: data.finished,
+          timestamp: Date.now()
+        });
+        
+        // 처리 표시
+        data.processed = true;
+        requestMap.set(key, data);
+        
+        console.log(`[INFO] Created/updated revenue update for book_id ${bookId}: amount=${data.amount}, finished=${data.finished}`);
+      } else {
+        console.log(`[WARN] No book_id found for book_idx ${bookIdx} in pending payment update`);
+      }
+    }
+  }
+};
+
 const handleRevenueResponse = async (response, request, maps) => {
-  const { paymentAmounts, paymentStatus, bookIdToIdxMap } = maps;
+  const { paymentAmounts, paymentStatus, bookIdToIdxMap, requestMap } = maps;
   const { parseMultipartFormData } = require('../utils/parser');
   
   try {
@@ -211,9 +322,41 @@ const handleRevenueResponse = async (response, request, maps) => {
       paymentAmounts.set(bookId, amount);
       paymentStatus.set(bookId, finished);
       console.log(`[INFO] Updated payment for book_id ${bookId} (book_idx ${bookIdx}): amount=${amount}, finished=${finished}`);
+      
+      // 중요: 결제 정보 업데이트 저장 (나중에 API 호출에 사용)
+      const revenueId = responseData?.id || null;
+      const revenueKey = `revenueUpdate_${revenueId || 'unknown'}`;
+      
+      requestMap.set(revenueKey, {
+        bookId,
+        bookIdx,
+        revenueId,
+        amount,
+        finished,
+        timestamp: Date.now()
+      });
+      
+      console.log(`[INFO] Stored payment update for book_id ${bookId} in requestMap`);
+      
       return { bookId, amount, finished };
     } else {
       console.log(`[WARN] No book_id found for book_idx ${bookIdx}`);
+      
+      // 중요: book_id를 즉시 찾을 수 없으면 임시 저장
+      // - 나중에 booking 데이터가 로드되면 처리됨
+      const revenueId = responseData?.id || null;
+      const paymentKey = `paymentUpdate_${bookIdx}`;
+      
+      requestMap.set(paymentKey, {
+        bookIdx,
+        revenueId,
+        amount, 
+        finished,
+        processed: false,
+        timestamp: Date.now()
+      });
+      
+      console.log(`[INFO] Stored pending payment update for book_idx ${bookIdx}: amount=${amount}, finished=${finished}`);
     }
   } catch (e) {
     console.error(`[ERROR] Failed to parse /owner/revenue/ response: ${e.message}`);
@@ -249,7 +392,13 @@ const handleBookingCreateResponse = async (url, response, requestMap, accessToke
     }
 
     const bookId = responseData.book_id;
-    bookIdToIdxMap.set(bookId, responseData.idx?.toString() || '');
+    const bookIdx = responseData.idx?.toString() || '';
+    bookIdToIdxMap.set(bookId, bookIdx);
+    
+    // 중요: book_idx를 통해 bookId를 매핑 (향후 결제 정보 업데이트를 위해)
+    if (bookIdx) {
+      requestMap.set(`bookIdx_${bookIdx}`, { bookId, timestamp: Date.now() });
+    }
     
     // Store the booking data with timestamp
     bookingDataMap.set(bookId, { 
@@ -342,6 +491,44 @@ const handleBookingCreateResponse = async (url, response, requestMap, accessToke
           
           console.log(`[INFO] Processed Booking_Create for book_id ${bookId} after waiting`);
           bookingDataMap.delete(bookId);
+          
+          // 중요: 10초 후에도 결제 정보가 있는지 다시 확인하고, 있다면 업데이트 API 호출
+          setTimeout(async () => {
+            const updatedAmount = paymentAmounts.get(bookId) || 0;
+            const updatedStatus = paymentStatus.get(bookId) || false;
+            
+            if (updatedAmount > 0 && updatedAmount !== currentPaymentAmount) {
+              console.log(`[INFO] Payment information updated after booking creation for book_id ${bookId}: amount=${updatedAmount}, completed=${updatedStatus}`);
+              
+              try {
+                // 현재 토큰 확인
+                let latestToken = accessToken;
+                if (!latestToken) {
+                  latestToken = await getAccessToken();
+                }
+                
+                // 결제 정보만 업데이트하는 API 호출
+                await sendTo24GolfApi(
+                  'Booking_Update',
+                  `payment_update_${bookId}`,
+                  { externalId: bookId },
+                  {
+                    externalId: bookId,
+                    paymentAmount: updatedAmount,
+                    paymented: updatedStatus
+                  },
+                  latestToken,
+                  null,
+                  paymentAmounts,
+                  paymentStatus
+                );
+                
+                console.log(`[INFO] Successfully updated payment information for book_id ${bookId} after booking creation`);
+              } catch (updateError) {
+                console.error(`[ERROR] Failed to update payment information after booking creation: ${updateError.message}`);
+              }
+            }
+          }, 5000); // 추가 5초 후 결제 정보 확인
         }
       }, 10000); // 10초 대기
     }
@@ -360,5 +547,6 @@ module.exports = {
   extractRevenueId,
   handleBookingListingResponse,
   handleRevenueResponse,
-  handleBookingCreateResponse
+  handleBookingCreateResponse,
+  processPendingPaymentUpdates
 };
