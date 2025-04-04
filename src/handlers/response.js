@@ -203,6 +203,55 @@ const setupResponseHandler = (page, accessToken, maps) => {
           timestamp: Date.now(),
           data: responseJson
         };
+
+        // `/owner/booking/` API 응답 처리 부분에서
+// bookingDataCache.data가 설정된 직후에 다음 코드 추가
+
+// 'canceling' 상태의 예약을 즉시 처리
+if (bookingDataCache.data && bookingDataCache.data.results) {
+    console.log(`[INFO] Checking for canceling bookings in fresh booking data...`);
+    const cancelingBookings = bookingDataCache.data.results.filter(booking => 
+      booking.state === 'canceling' &&
+      !processedBookings.has(booking.book_id) &&
+      !processedAppBookings.has(booking.book_id)
+    );
+    
+    if (cancelingBookings.length > 0) {
+      console.log(`[INFO] Found ${cancelingBookings.length} canceling bookings to process`);
+      for (const booking of cancelingBookings) {
+        try {
+          const bookId = booking.book_id;
+          // 유효한 토큰 확인
+          let currentToken = accessToken;
+          if (!currentToken) {
+            currentToken = await getAccessToken();
+          }
+          
+          console.log(`[INFO] Processing canceling booking: ${bookId}`);
+          const cancelPayload = {
+            canceled_by: 'App User',
+            externalId: bookId
+          };
+          
+          await sendTo24GolfApi(
+            'Booking_Cancel', 
+            '', 
+            cancelPayload, 
+            null, 
+            currentToken, 
+            processedBookings, 
+            paymentAmounts, 
+            paymentStatus
+          );
+          
+          console.log(`[INFO] Processed canceling booking: ${bookId}`);
+          processedAppBookings.add(bookId);
+        } catch (error) {
+          console.error(`[ERROR] Failed to process canceling booking: ${error.message}`);
+        }
+      }
+    }
+  }
         
         // 일반 예약 데이터 처리
         await handleBookingListingResponse(response, maps);
@@ -494,7 +543,8 @@ const processAppBookings = async (response, accessToken, maps, customerUpdates, 
       }
 
       // 예약 상태 체크
-      const isCanceled = booking.state === 'canceled';
+      //const isCanceled = booking.state === 'canceled';
+      const isCanceled = booking.state === 'canceled' || booking.state === 'canceling';
       const isSuccessful = booking.state === 'success';
       
       // 앱 예약만 찾기 (book_type이 'U' 또는 confirmed_by가 'IM' 또는 immediate_booked가 true)
