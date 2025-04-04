@@ -2,6 +2,8 @@ const { sendTo24GolfApi, getAccessToken } = require('../utils/api');
 
 // 외부에서 처리된 예약 ID 추적용 집합
 const processedBookingIds = new Set();
+// 예약 생성 진행 중인 ID를 추적하는 집합
+const pendingCreateBookingIds = new Set();
 
 // 보류 중인 모든 예약 업데이트 처리
 const processPendingBookingUpdates = async (accessToken, maps) => {
@@ -17,6 +19,12 @@ const processPendingBookingUpdates = async (accessToken, maps) => {
       // 이미 처리된 예약인지 확인
       if (processedBookingIds.has(bookId)) {
         console.log(`[INFO] Skipping already processed booking update for ${bookId}`);
+        continue;
+      }
+      
+      // 진행 중인 예약 생성이 있는지 확인 - 있으면 처리하지 않음
+      if (pendingCreateBookingIds.has(bookId)) {
+        console.log(`[INFO] Skipping update for booking ${bookId} as it's being created`);
         continue;
       }
       
@@ -57,6 +65,19 @@ const processPendingBookingUpdates = async (accessToken, maps) => {
       // 이미 처리된 예약인지 확인
       if (processedBookingIds.has(bookId)) {
         console.log(`[INFO] Skipping already processed payment update for ${bookId}`);
+        continue;
+      }
+      
+      // 중요: 예약 생성 중인 경우 스킵 (새로 추가)
+      if (pendingCreateBookingIds.has(bookId)) {
+        console.log(`[INFO] Skipping payment update for ${bookId} as it's being created`);
+        continue;
+      }
+      
+      // 생성된지 1분 이내의 예약은 스킵 (새로 생성된 예약은 이미 최신 결제 정보 포함)
+      const bookingData = bookingDataMap.get(bookId);
+      if (bookingData && (Date.now() - bookingData.timestamp < 60000)) {
+        console.log(`[INFO] Skipping payment update for ${bookId} as it was recently created`);
         continue;
       }
       
@@ -118,8 +139,14 @@ const processBookingUpdate = async (url, payload, accessToken, maps) => {
   }
   
   // 이미 처리된 예약인지 확인
-  if (processedBookingIds.has(bookingId)) {
-    console.log(`[INFO] Skipping already processed booking update for ${bookingId}`);
+  if (processedBookingIds.has(bookId)) {
+    console.log(`[INFO] Skipping already processed booking update for ${bookId}`);
+    return;
+  }
+  
+  // 중요: 예약 생성 중인 경우 스킵 (새로 추가)
+  if (pendingCreateBookingIds.has(bookId)) {
+    console.log(`[INFO] Skipping update for booking ${bookId} as it's being created`);
     return;
   }
   
@@ -283,8 +310,11 @@ const handleBookingListingResponse = async (response, maps) => {
       }
     }
     
-    // 예약 목록을 가져온 후 바로 처리 실행 (기존 프로세스)
-    processPendingPaymentUpdates(maps);
+    // 여기서 결제 정보 업데이트가 필요한 예약만 처리하는 것으로 수정
+    // processPendingPaymentUpdates(maps); - 삭제
+    
+    // 보류 중인 예약 업데이트에 대해서는 계속 처리
+    processPendingBookingUpdates(accessToken, maps);
   } catch (e) {
     console.error(`[ERROR] Failed to parse /owner/booking/ response: ${e.message}`);
   }
@@ -311,6 +341,12 @@ const processPendingPaymentUpdates = (maps) => {
       
       if (bookId) {
         console.log(`[INFO] Found matching book_id ${bookId} for book_idx ${bookIdx} in pending payment update`);
+        
+        // 예약 생성 중인지 확인
+        if (pendingCreateBookingIds.has(bookId)) {
+          console.log(`[INFO] Skipping payment update for ${bookId} as it's being created`);
+          continue;
+        }
         
         // 해당 bookId로 revenueUpdate_를 생성하거나 업데이트
         const revenueKey = `revenueUpdate_${data.revenueId || 'unknown'}`;
@@ -372,6 +408,14 @@ const handleRevenueResponse = async (response, request, maps) => {
     const bookId = match ? match[0] : null;
 
     if (bookId) {
+      // 중요: 해당 예약이 생성 중인지 확인
+      if (pendingCreateBookingIds.has(bookId)) {
+        console.log(`[INFO] Found booking ${bookId} in creation process, updating payment info`);
+        paymentAmounts.set(bookId, amount);
+        paymentStatus.set(bookId, finished);
+        return { bookId, amount, finished };
+      }
+      
       paymentAmounts.set(bookId, amount);
       paymentStatus.set(bookId, finished);
       console.log(`[INFO] Updated payment for book_id ${bookId} (book_idx ${bookIdx}): amount=${amount}, finished=${finished}`);
@@ -446,6 +490,9 @@ const handleBookingCreateResponse = async (url, response, requestMap, accessToke
 
     const bookId = responseData.book_id;
     
+    // 이 예약이 현재 처리 중이라고 표시
+    pendingCreateBookingIds.add(bookId);
+    
     // 이미 처리된 예약인지 확인
     if (processedBookingIds.has(bookId)) {
       console.log(`[INFO] Skipping already processed booking create for ${bookId}`);
@@ -463,7 +510,13 @@ const handleBookingCreateResponse = async (url, response, requestMap, accessToke
     });
 
     console.log(`[INFO] Booking_Create stored for book_id ${bookId}, idx: ${responseData.idx}`);
-
+    
+    // 완료 후 처리 중 목록에서 제거
+    setTimeout(() => {
+      pendingCreateBookingIds.delete(bookId);
+      console.log(`[INFO] Removed ${bookId} from pending creation list`);
+    }, 5000); // 5초 후에 예약 생성 중 목록에서 제거
+    
     // 결제 정보 확인은 생략 - 이제 request.js에서 직접 처리함
     processedBookingIds.add(bookId); // 처리 완료 표시
     
@@ -482,5 +535,6 @@ module.exports = {
   handleBookingListingResponse,
   handleRevenueResponse,
   handleBookingCreateResponse,
-  processPendingPaymentUpdates
+  processPendingPaymentUpdates,
+  pendingCreateBookingIds  // 예약 생성 중 목록을 외부에 노출
 };
