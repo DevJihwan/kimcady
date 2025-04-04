@@ -101,6 +101,43 @@ const extractAllowedFields = (data) => {
   return result;
 };
 
+// 한국 시간(KST)을 UTC로 변환하는 함수
+const convertKSTtoUTC = (kstDateTimeString) => {
+  if (!kstDateTimeString) return null;
+  
+  try {
+    // KST 시간에서 UTC로 변환
+    // '+09:00' 부분을 제거하고 ISO 8601 포맷으로 파싱
+    let dateString = kstDateTimeString;
+    if (dateString.includes('+09:00')) {
+      // "+09:00"을 제거하고 해당 시간으로부터 9시간을 뺌
+      dateString = dateString.replace('+09:00', '');
+      const date = new Date(dateString);
+      date.setHours(date.getHours() - 9);
+      return date.toISOString(); // 이미 'Z'가 포함된 UTC 형식
+    } else if (!dateString.includes('Z')) {
+      // 'Z'도 '+09:00'도 없으면 로컬 시간으로 가정하고 UTC로 변환
+      const date = new Date(dateString);
+      return date.toISOString();
+    }
+    // 이미 UTC('Z' 포함)라면 그대로 반환
+    return kstDateTimeString;
+  } catch (e) {
+    console.error(`[ERROR] Failed to convert KST to UTC: ${kstDateTimeString}`, e);
+    return kstDateTimeString; // 변환 실패 시 원래 값 반환
+  }
+};
+
+// 시간 문자열에서 시간대 정보 추출
+const getTimezoneFromString = (dateTimeString) => {
+  if (dateTimeString.includes('+09:00')) {
+    return '+09:00';
+  } else if (dateTimeString.includes('Z')) {
+    return 'Z';
+  }
+  return '';
+};
+
 const sendTo24GolfApi = async (type, url, payload, response, accessToken, processedBookings = new Set(), paymentAmounts = new Map(), paymentStatus = new Map()) => {
   if (!accessToken) {
     console.error(`[API Error] Cannot send ${type}: Missing access token`);
@@ -167,14 +204,20 @@ const sendTo24GolfApi = async (type, url, payload, response, accessToken, proces
     if (response && response.startDate && response.roomId) {
       console.log(`[INFO] Using complete API data from response object`);
       
+      // UTC 시간으로 변환
+      const startDateUTC = convertKSTtoUTC(response.startDate);
+      const endDateUTC = response.endDate ? convertKSTtoUTC(response.endDate) : calculateEndTime(startDateUTC);
+      
+      console.log(`[DEBUG] Time conversion: ${response.startDate} -> ${startDateUTC}`);
+      
       // 데이터를 복사해서 기본 API 데이터 생성
       const tempData = { 
         externalId: bookId,
         name: response.name || 'Unknown',
         phone: response.phone || '010-0000-0000',
         partySize: parseInt(response.partySize || 1, 10),
-        startDate: response.startDate,
-        endDate: response.endDate,
+        startDate: startDateUTC,
+        endDate: endDateUTC,
         roomId: response.roomId,
         paymented: isPaymentCompleted,
         paymentAmount: paymentAmount,
@@ -187,12 +230,12 @@ const sendTo24GolfApi = async (type, url, payload, response, accessToken, proces
     // 앱 예약인 경우
     else if (response && (response.bookType === 'U' || response.immediate === true)) {
       // 앱 예약 처리
-      const currentDateTime = new Date().toISOString().replace('Z', '+09:00');
+      const currentDateTime = new Date().toISOString(); // 현재 시간 UTC로
       
       // startDate가 undefined거나 "undefined"인 경우 현재 시간 사용
       let startDateTime = currentDateTime;
       if (response.startDate && response.startDate !== "undefined") {
-        startDateTime = response.startDate;
+        startDateTime = convertKSTtoUTC(response.startDate);
       }
       
       const tempData = {
@@ -202,7 +245,7 @@ const sendTo24GolfApi = async (type, url, payload, response, accessToken, proces
         partySize: parseInt(response.partySize || 1, 10),
         startDate: startDateTime,
         endDate: response.endDate && response.endDate !== "undefined" ? 
-                response.endDate : calculateEndTime(startDateTime),
+                convertKSTtoUTC(response.endDate) : calculateEndTime(startDateTime),
         roomId: response.roomId || 'unknown',
         paymented: isPaymentCompleted,
         paymentAmount,
@@ -213,13 +256,24 @@ const sendTo24GolfApi = async (type, url, payload, response, accessToken, proces
       apiData = extractAllowedFields(tempData);
     } else {
       // 웹 예약 처리 (기존 방식)
+      let startDateTime = null;
+      if (response.start_datetime) {
+        startDateTime = convertKSTtoUTC(response.start_datetime);
+      } else if (payload?.book_date && payload?.book_time) {
+        startDateTime = convertKSTtoUTC(`${payload.book_date}T${payload.book_time || '00:00:00'}+09:00`);
+      } else {
+        startDateTime = new Date().toISOString();
+      }
+      
       const tempData = {
         externalId: bookId,
         name: response.name || payload?.name || 'Unknown',
         phone: response.phone || payload?.phone || '010-0000-0000',
         partySize: parseInt(response.person || payload?.person || 1, 10),
-        startDate: response.start_datetime || `${payload?.book_date}T${payload?.book_time || '00:00:00'}+09:00`,
-        endDate: response.end_datetime || calculateEndTime(response.start_datetime || `${payload?.book_date}T${payload?.book_time || '00:00:00'}+09:00`),
+        startDate: startDateTime,
+        endDate: response.end_datetime ? 
+                 convertKSTtoUTC(response.end_datetime) : 
+                 calculateEndTime(startDateTime),
         roomId: (response.room || payload?.room || payload?.room_id || 'unknown').toString(),
         paymented: isPaymentCompleted,
         paymentAmount,
@@ -231,13 +285,23 @@ const sendTo24GolfApi = async (type, url, payload, response, accessToken, proces
   } else if (type === 'Booking_Update') {
     apiMethod = 'PATCH';
     apiUrl = `${API_BASE_URL}/stores/${storeId}/reservation/crawl`;
+    
+    let startDateTime = null;
+    if (payload.start_datetime) {
+      startDateTime = convertKSTtoUTC(payload.start_datetime);
+    } else {
+      startDateTime = new Date().toISOString();
+    }
+    
     const tempData = {
       externalId: bookId,
       name: payload.name || 'Unknown',
       phone: payload.phone || '010-0000-0000',
       partySize: parseInt(payload.person || 1, 10),
-      startDate: payload.start_datetime || new Date().toISOString().replace('Z', '+09:00'),
-      endDate: payload.end_datetime || calculateEndTime(payload.start_datetime),
+      startDate: startDateTime,
+      endDate: payload.end_datetime ? 
+               convertKSTtoUTC(payload.end_datetime) : 
+               calculateEndTime(startDateTime),
       roomId: payload.room_id || payload.room || 'unknown',
       paymented: isPaymentCompleted,
       paymentAmount,
@@ -330,17 +394,17 @@ const sendTo24GolfApi = async (type, url, payload, response, accessToken, proces
 const calculateEndTime = (startTime) => {
   if (!startTime || startTime.includes('undefined')) {
     console.log(`[WARN] Invalid start time for calculation: ${startTime}`);
-    return new Date().toISOString().replace('Z', '+09:00');
+    return new Date().toISOString(); // UTC 반환
   }
   
   try {
     const date = new Date(startTime);
     date.setHours(date.getHours() + 1);
-    return date.toISOString().replace('Z', '+09:00');
+    return date.toISOString(); // UTC 형식으로 반환 ('Z' 포함)
   } catch (e) {
     console.error(`[ERROR] Failed to calculate end time from: ${startTime}`);
-    return new Date().toISOString().replace('Z', '+09:00');
+    return new Date().toISOString(); // UTC 반환
   }
 };
 
-module.exports = { getAccessToken, sendTo24GolfApi, getStoreInfo };
+module.exports = { getAccessToken, sendTo24GolfApi, getStoreInfo, convertKSTtoUTC };
