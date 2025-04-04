@@ -1,5 +1,6 @@
 const { parseMultipartFormData } = require('../utils/parser');
 const { sendTo24GolfApi, getAccessToken, convertKSTtoUTC } = require('../utils/api');
+const { generateRandomBookId } = require('../utils/helpers');
 
 const setupRequestHandler = (page, accessToken, maps) => {
   const { requestMap, processedBookings, paymentAmounts, paymentStatus, bookIdToIdxMap, revenueToBookingMap, bookingDataMap } = maps;
@@ -101,15 +102,12 @@ const setupRequestHandler = (page, accessToken, maps) => {
         
         console.log(`[DEBUG] Manager booking - converting time: ${payload.start_datetime} -> ${startDate}`);
         
-        // 모의 bookId 생성 (실제 bookId는 응답에서 받음)
-        const tempBookId = `TEMP_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+        // 올바른 형식의 예약 ID 생성 (임시 ID가 아닌 실제 형식 사용)
+        const realBookId = generateRandomBookId();
         
-        // 결제 정보를 확인하기 위해 book_idx가 필요합니다
-        // 그러나 예약 생성 시에는 book_idx가 아직 없으므로 한번 지연 시킵니다
-
-        // 예약 정보를 저장
+        // 결제 정보를 확인하기 위해, 생성 전에 잠시 지연
         const bookingInfo = {
-          tempBookId,
+          bookId: realBookId,
           url,
           payload,
           startDate,
@@ -118,9 +116,9 @@ const setupRequestHandler = (page, accessToken, maps) => {
         };
         
         // requestMap에 예약 정보 저장
-        requestMap.set(`bookingCreate_${tempBookId}`, bookingInfo);
+        requestMap.set(`bookingCreate_${realBookId}`, bookingInfo);
         
-        console.log(`[INFO] Delaying booking creation for tempBookId: ${tempBookId} to gather payment information`);
+        console.log(`[INFO] Delaying booking creation for bookId: ${realBookId} to gather payment information`);
         
         // 예약 정보를 API로 전송하기 전 결제 정보 대기
         setTimeout(async () => {
@@ -142,10 +140,13 @@ const setupRequestHandler = (page, accessToken, maps) => {
               console.log(`[INFO] Found payment information for new booking: amount=${amount}, finished=${finished}`);
             }
             
+            // 예약자 이름 추출 (payload에서 추출 또는 기본값 'Guest')
+            const guestName = payload.name || 'Guest';
+            
             // 예약 데이터 준비
             const apiData = {
-              externalId: tempBookId,
-              name: payload.name || 'Manager Booking',
+              externalId: realBookId,
+              name: guestName,
               phone: payload.phone || '010-0000-0000',
               partySize: parseInt(payload.person || 1, 10),
               startDate: startDate,
@@ -175,7 +176,7 @@ const setupRequestHandler = (page, accessToken, maps) => {
             console.log(`[INFO] Sent Manager Booking_Create to 24Golf API with amount: ${amount}`);
             
             // 요청 맵에서 제거
-            requestMap.delete(`bookingCreate_${tempBookId}`);
+            requestMap.delete(`bookingCreate_${realBookId}`);
           } catch (error) {
             console.error(`[ERROR] Failed to process Manager Booking_Create: ${error.message}`);
           }
@@ -364,7 +365,7 @@ const findLatestPaymentInfo = (requestMap) => {
 // 보류 중인 예약에 결제 정보 업데이트
 const updatePendingBookingWithPayment = (requestMap, bookIdx, amount, finished) => {
   for (const [key, data] of requestMap.entries()) {
-    if (key.startsWith('bookingCreate_') && data.tempBookId) {
+    if (key.startsWith('bookingCreate_') && data.bookId) {
       console.log(`[INFO] Found pending booking creation, adding payment info: amount=${amount}, finished=${finished}`);
       data.paymentAmount = amount;
       data.paymentFinished = finished;
