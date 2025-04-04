@@ -1,5 +1,5 @@
 const { parseMultipartFormData } = require('../utils/parser');
-const { sendTo24GolfApi, getAccessToken } = require('../utils/api');
+const { sendTo24GolfApi, getAccessToken, convertKSTtoUTC } = require('../utils/api');
 
 const setupRequestHandler = (page, accessToken, maps) => {
   const { requestMap, processedBookings, paymentAmounts, paymentStatus, bookIdToIdxMap, revenueToBookingMap, bookingDataMap } = maps;
@@ -92,6 +92,61 @@ const setupRequestHandler = (page, accessToken, maps) => {
     else if (url.includes('/owner/booking') && method === 'POST') {
       console.log(`[INFO] Booking_Create detected - URL: ${url}, Method: ${method}`);
       console.log(`[DEBUG] Booking_Create payload:`, JSON.stringify(payload, null, 2));
+      
+      // 점주 웹사이트에서 예약 등록 처리 (리팩토링 과정에서 누락된 부분)
+      if (payload.book_type === 'M' || !payload.book_id) {
+        // 결제 금액은 아직 없을 수 있음 (예약 생성 후 결제 등록)
+        const amount = parseInt(payload.amount, 10) || 0;
+        const finished = false;
+        
+        // 시간 형식 변환 (KST -> UTC)
+        const startDate = convertKSTtoUTC(payload.start_datetime);
+        const endDate = convertKSTtoUTC(payload.end_datetime);
+        
+        console.log(`[DEBUG] Manager booking - converting time: ${payload.start_datetime} -> ${startDate}`);
+        
+        // 모의 bookId 생성 (실제 bookId는 응답에서 받음)
+        const tempBookId = `TEMP_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+        
+        // 직접 API 호출 (점주 예약)
+        try {
+          let currentToken = accessToken;
+          if (!currentToken) {
+            currentToken = await getAccessToken();
+          }
+          
+          // 예약 데이터 준비
+          const apiData = {
+            externalId: tempBookId, // 임시 ID (응답에서 실제 ID로 대체됨)
+            name: payload.name || 'Manager Booking',
+            phone: payload.phone || '010-0000-0000',
+            partySize: parseInt(payload.person || 1, 10),
+            startDate: startDate,
+            endDate: endDate,
+            roomId: payload.room_id?.toString() || 'unknown',
+            hole: payload.hole || '18',
+            paymented: finished,
+            paymentAmount: amount,
+            crawlingSite: 'KimCaddie',
+            immediate: false
+          };
+          
+          console.log(`[INFO] Processing Manager Booking_Create: ${JSON.stringify(apiData, null, 2)}`);
+          
+          // tempBookId를 키로 사용해 requestMap에 저장
+          requestMap.set(tempBookId, { 
+            url, 
+            method, 
+            payload, 
+            type: 'Manager_Booking_Create',
+            apiData
+          });
+          
+          // 응답 처리는 response 핸들러에서 실행됨
+        } catch (error) {
+          console.error(`[ERROR] Failed to prepare Manager Booking_Create: ${error.message}`);
+        }
+      }
       
       // 결제 정보 추출 시도
       if (payload.amount) {
