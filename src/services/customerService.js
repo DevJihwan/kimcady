@@ -69,7 +69,7 @@ class CustomerService {
       // 캐시된 예약 데이터 확인
       if (this.bookingDataCache.data && (Date.now() - this.bookingDataCache.timestamp < 60000)) {
         console.log(`[INFO] Using cached booking data from ${new Date(this.bookingDataCache.timestamp).toISOString()}`);
-        this.processCustomerBookings(customerId, this.bookingDataCache.data);
+        await this.processCustomerBookings(customerId, this.bookingDataCache.data);
       } else {
         console.log(`[INFO] Waiting for next booking data to process customer ${customerId}`);
         // 다음 예약 데이터가 수신될 때까지 기다림 - 주기적으로 요청되는 데이터
@@ -88,7 +88,8 @@ class CustomerService {
     }
   }
 
-  processCustomerBookings(customerId, bookingData) {
+  // async 키워드 추가 - 이 함수 내에서 await을 사용하므로 필요함
+  async processCustomerBookings(customerId, bookingData) {
     console.log(`[INFO] Processing bookings for customer ${customerId}`);
     const { paymentAmounts, paymentStatus, processedBookings } = this.maps;
     
