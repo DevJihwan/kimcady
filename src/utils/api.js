@@ -138,271 +138,112 @@ const getTimezoneFromString = (dateTimeString) => {
   return '';
 };
 
-const sendTo24GolfApi = async (type, url, payload, response, accessToken, processedBookings = new Set(), paymentAmounts = new Map(), paymentStatus = new Map()) => {
-  if (!accessToken) {
-    console.error(`[API Error] Cannot send ${type}: Missing access token`);
-    try {
-      accessToken = await getAccessToken();
-    } catch (e) {
-      console.error(`[API Error] Failed to refresh token: ${e.message}`);
+const sendTo24GolfApi = async (type, url, payload, apiData, accessToken, processedBookings = new Set(), paymentAmounts = new Map(), paymentStatus = new Map()) => {
+    if (!accessToken) {
+      console.error(`[API Error] Cannot send ${type}: Missing access token`);
+      try {
+        accessToken = await getAccessToken();
+      } catch (e) {
+        console.error(`[API Error] Failed to refresh token: ${e.message}`);
+        return;
+      }
+    }
+  
+    const bookId = apiData?.externalId || payload?.externalId || 'unknown';
+  
+    if (type === 'Booking_Create' && processedBookings.has(bookId)) {
+      console.log(`[INFO] Skipping duplicate Booking_Create for book_id: ${bookId}`);
       return;
     }
-  }
-
-  const bookId = response?.book_id || response?.externalId || payload?.externalId || 'unknown';
   
-  // 취소 요청인 경우 중복 체크하지 않음
-  if (type === 'Booking_Create' && processedBookings.has(bookId)) {
-    console.log(`[INFO] Skipping duplicate Booking_Create for book_id: ${bookId}`);
-    return;
-  }
-
-  // 결제 정보 로깅 및 확인
-  // 핵심 변경: 결제 정보 우선순위 조정
-  // 1. 직접 response 객체에서 설정된 값 확인 (가장 우선순위 높음)
-  // 2. paymentAmounts, paymentStatus 맵에서 확인
-  // 3. 없으면 기본값 사용
+    // 결제 정보 설정
+    let paymentAmount = apiData?.paymentAmount || paymentAmounts.get(bookId) || 0;
+    let isPaymentCompleted = apiData?.paymented !== undefined ? apiData.paymented : paymentStatus.get(bookId) || false;
   
-  // 기본값 설정
-  let paymentAmount = 0;
-  let isPaymentCompleted = false;
+    console.log(`[DEBUG] Payment info for ${bookId} - Amount: ${paymentAmount}, Completed: ${isPaymentCompleted}`);
   
-  // 1. response 객체에서 결제 정보 확인
-  if (response && typeof response === 'object') {
-    // paymentAmount 확인
-    if (response.paymentAmount !== undefined) {
-      const amount = parseInt(response.paymentAmount, 10);
-      if (amount > 0) {
-        paymentAmount = amount;
-        console.log(`[INFO] Using payment amount ${paymentAmount} from response object for book_id: ${bookId}`);
-      }
-    } else if (response.amount !== undefined) {
-      const amount = parseInt(response.amount, 10);
-      if (amount > 0) {
-        paymentAmount = amount;
-        console.log(`[INFO] Using amount ${paymentAmount} from response object for book_id: ${bookId}`);
-      }
-    }
-    
-    // paymented 상태 확인
-    if (response.paymented !== undefined) {
-      isPaymentCompleted = response.paymented;
-      console.log(`[INFO] Using payment status ${isPaymentCompleted} from response.paymented for book_id: ${bookId}`);
-    }
-  }
+    const timestamp = new Date().toISOString();
+    console.log(`[${timestamp}] ${type} - URL: ${url} - Payload:`, JSON.stringify(payload, null, 2));
+    console.log(`[DEBUG] Received apiData:`, JSON.stringify(apiData, null, 2));
   
-  // 2. 맵에서 결제 정보 확인 (맵에 저장된 값이 있다면 response 값보다 우선함)
-  const mapAmount = paymentAmounts.get(bookId);
-  if (mapAmount !== undefined && mapAmount > 0) {
-    paymentAmount = mapAmount;
-    console.log(`[INFO] Using payment amount ${paymentAmount} from maps for book_id: ${bookId}`);
-  }
+    const headers = { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' };
+    const storeId = getStoreId();
   
-  const mapStatus = paymentStatus.get(bookId);
-  if (mapStatus !== undefined) {
-    isPaymentCompleted = mapStatus;
-    console.log(`[INFO] Using payment status ${isPaymentCompleted} from maps for book_id: ${bookId}`);
-  }
-  
-  console.log(`[DEBUG] Payment info for ${bookId} - Amount: ${paymentAmount}, Completed: ${isPaymentCompleted}`);
-
-  const timestamp = new Date().toISOString();
-  console.log(`[${timestamp}] ${type} - URL: ${url} - Payload:`, JSON.stringify(payload, null, 2));
-  console.log(`[DEBUG] API Data Prep - bookId: ${bookId}, paymentAmount: ${paymentAmount}, isPaymentCompleted: ${isPaymentCompleted}`);
-
-  const headers = { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' };
-  const storeId = getStoreId();
-
-  let apiMethod, apiUrl, apiData;
-  if (type === 'Booking_Create') {
-    apiMethod = 'POST';
-    apiUrl = `${API_BASE_URL}/stores/${storeId}/reservation/crawl`;
-    
-    // 완전한 API 데이터가 response에 있는 경우 (예약 확정)
-    if (response && response.startDate && response.roomId) {
-      console.log(`[INFO] Using complete API data from response object`);
-      
-      // UTC 시간으로 변환
-      const startDateUTC = convertKSTtoUTC(response.startDate);
-      const endDateUTC = response.endDate ? convertKSTtoUTC(response.endDate) : calculateEndTime(startDateUTC);
-      
-      console.log(`[DEBUG] Time conversion: ${response.startDate} -> ${startDateUTC}`);
-      
-      // 데이터를 복사해서 기본 API 데이터 생성
-      const tempData = { 
-        externalId: bookId,
-        name: response.name || 'Unknown',
-        phone: response.phone || '010-0000-0000',
-        partySize: parseInt(response.partySize || 1, 10),
-        startDate: startDateUTC,
-        endDate: endDateUTC,
-        roomId: response.roomId,
-        paymented: isPaymentCompleted,
-        paymentAmount: paymentAmount,
-        crawlingSite: 'KimCaddie'
-      };
-      
-      // 필수 필드만 포함된 객체 생성
-      apiData = extractAllowedFields(tempData);
-    }
-    // 앱 예약인 경우
-    else if (response && (response.bookType === 'U' || response.immediate === true)) {
-      // 앱 예약 처리
-      const currentDateTime = new Date().toISOString(); // 현재 시간 UTC로
-      
-      // startDate가 undefined거나 "undefined"인 경우 현재 시간 사용
-      let startDateTime = currentDateTime;
-      if (response.startDate && response.startDate !== "undefined") {
-        startDateTime = convertKSTtoUTC(response.startDate);
-      }
-      
-      const tempData = {
-        externalId: bookId,
-        name: response.name || 'Unknown',
-        phone: response.phone || '010-0000-0000',
-        partySize: parseInt(response.partySize || 1, 10),
-        startDate: startDateTime,
-        endDate: response.endDate && response.endDate !== "undefined" ? 
-                convertKSTtoUTC(response.endDate) : calculateEndTime(startDateTime),
-        roomId: response.roomId || 'unknown',
-        paymented: isPaymentCompleted,
-        paymentAmount,
-        crawlingSite: 'KimCaddie'
-      };
-      
-      console.log(`[INFO] Creating API data for app booking`);
-      apiData = extractAllowedFields(tempData);
-    } else {
-      // 웹 예약 처리 (기존 방식)
-      let startDateTime = null;
-      if (response.start_datetime) {
-        startDateTime = convertKSTtoUTC(response.start_datetime);
-      } else if (payload?.book_date && payload?.book_time) {
-        startDateTime = convertKSTtoUTC(`${payload.book_date}T${payload.book_time || '00:00:00'}+09:00`);
-      } else {
-        startDateTime = new Date().toISOString();
-      }
-      
-      const tempData = {
-        externalId: bookId,
-        name: response.name || payload?.name || 'Unknown',
-        phone: response.phone || payload?.phone || '010-0000-0000',
-        partySize: parseInt(response.person || payload?.person || 1, 10),
-        startDate: startDateTime,
-        endDate: response.end_datetime ? 
-                 convertKSTtoUTC(response.end_datetime) : 
-                 calculateEndTime(startDateTime),
-        roomId: (response.room || payload?.room || payload?.room_id || 'unknown').toString(),
-        paymented: isPaymentCompleted,
-        paymentAmount,
-        crawlingSite: 'KimCaddie'
-      };
-      
-      apiData = extractAllowedFields(tempData);
-    }
-  } else if (type === 'Booking_Update') {
-    apiMethod = 'PATCH';
-    apiUrl = `${API_BASE_URL}/stores/${storeId}/reservation/crawl`;
-    
-    if (response && response.externalId && (response.paymentAmount !== undefined || response.paymented !== undefined)) {
-      // 결제 정보만 업데이트하는 경우
-      apiData = {
-        externalId: response.externalId,
-        paymentAmount: paymentAmount,
-        paymented: isPaymentCompleted,
-        crawlingSite: 'KimCaddie'
-      };
-      
-      console.log(`[INFO] Payment-only update for book_id: ${response.externalId}`);
-    } else {
-      // 일반 예약 정보 업데이트
-      let startDateTime = null;
-      if (payload.start_datetime) {
-        startDateTime = convertKSTtoUTC(payload.start_datetime);
-      } else {
-        startDateTime = new Date().toISOString();
-      }
-      
-      const tempData = {
-        externalId: bookId,
-        name: payload.name || 'Unknown',
-        phone: payload.phone || '010-0000-0000',
-        partySize: parseInt(payload.person || 1, 10),
-        startDate: startDateTime,
-        endDate: payload.end_datetime ? 
-                 convertKSTtoUTC(payload.end_datetime) : 
-                 calculateEndTime(startDateTime),
-        roomId: payload.room_id || payload.room || 'unknown',
-        paymented: isPaymentCompleted,
-        paymentAmount,
-        crawlingSite: 'KimCaddie'
-      };
-      
-      apiData = extractAllowedFields(tempData);
-    }
-  } else if (type === 'Booking_Cancel') {
-    apiMethod = 'DELETE';
-    apiUrl = `${API_BASE_URL}/stores/${storeId}/reservation/crawl`;
-    apiData = { 
-      externalId: bookId, 
-      crawlingSite: 'KimCaddie', 
-      reason: payload.canceled_by || 'Canceled by Manager' 
-    };
-  } else {
-    console.log(`[WARN] Unknown type: ${type}, skipping API call`);
-    return;
-  }
-
-  console.log(`[DEBUG] ${type} API data:`, JSON.stringify(apiData, null, 2));
-
-  try {
-    console.log(`[API Request] Sending ${type} to ${apiUrl}`);
-    let apiResponse;
-    
-    if (apiMethod === 'DELETE') {
-      apiResponse = await axios.delete(apiUrl, { 
-        headers, 
-        data: apiData,
-        timeout: 10000
-      });
-    } else {
-      apiResponse = await axios({ 
-        method: apiMethod, 
-        url: apiUrl, 
-        headers, 
-        data: apiData,
-        timeout: 10000
-      });
-    }
-    
-    console.log(`[API] Successfully sent ${type}: ${apiResponse.status}`);
-    console.log(`[API] Response data:`, JSON.stringify(apiResponse.data, null, 2));
-    
+    let apiMethod, apiUrl, finalApiData;
     if (type === 'Booking_Create') {
-      processedBookings.add(bookId);
+      apiMethod = 'POST';
+      apiUrl = `${API_BASE_URL}/stores/${storeId}/reservation/crawl`;
+      finalApiData = extractAllowedFields(apiData);
+    } else if (type === 'Booking_Update') {
+      apiMethod = 'PATCH';
+      apiUrl = `${API_BASE_URL}/stores/${storeId}/reservation/crawl`;
+      // request.js에서 전달된 apiData를 우선 사용
+      finalApiData = {
+        ...extractAllowedFields(apiData),
+        paymented: isPaymentCompleted,
+        paymentAmount: paymentAmount
+      };
+    } else if (type === 'Booking_Cancel') {
+      apiMethod = 'DELETE';
+      apiUrl = `${API_BASE_URL}/stores/${storeId}/reservation/crawl`;
+      finalApiData = { 
+        externalId: bookId, 
+        crawlingSite: 'KimCaddie', 
+        reason: payload.canceled_by || 'Canceled by Manager' 
+      };
+    } else {
+      console.log(`[WARN] Unknown type: ${type}, skipping API call`);
+      return;
     }
-    
-    return apiResponse.data;
-  } catch (error) {
-    console.error(`[API Error] Failed to send ${type}: ${error.message}`);
-    if (error.response) {
-      console.error('Response data:', error.response.data);
-      console.error('Response status:', error.response.status);
-    }
-    
-    // Token might be expired, try to refresh once
-    if (error.response && error.response.status === 401) {
-      console.log('[API] Token might be expired, attempting to refresh...');
-      try {
-        const newToken = await getAccessToken();
-        // Retry the request with the new token
-        return sendTo24GolfApi(type, url, payload, response, newToken, processedBookings, paymentAmounts, paymentStatus);
-      } catch (tokenError) {
-        console.error(`[API Error] Failed to refresh token: ${tokenError.message}`);
+  
+    console.log(`[DEBUG] Final ${type} API data:`, JSON.stringify(finalApiData, null, 2));
+  
+    try {
+      console.log(`[API Request] Sending ${type} to ${apiUrl}`);
+      let apiResponse;
+  
+      if (apiMethod === 'DELETE') {
+        apiResponse = await axios.delete(apiUrl, { 
+          headers, 
+          data: finalApiData,
+          timeout: 10000
+        });
+      } else {
+        apiResponse = await axios({ 
+          method: apiMethod, 
+          url: apiUrl, 
+          headers, 
+          data: finalApiData,
+          timeout: 10000
+        });
+      }
+  
+      console.log(`[API] Successfully sent ${type}: ${apiResponse.status}`);
+      console.log(`[API] Response data:`, JSON.stringify(apiResponse.data, null, 2));
+  
+      if (type === 'Booking_Create') {
+        processedBookings.add(bookId);
+      }
+  
+      return apiResponse.data;
+    } catch (error) {
+      console.error(`[API Error] Failed to send ${type}: ${error.message}`);
+      if (error.response) {
+        console.error('Response data:', error.response.data);
+        console.error('Response status:', error.response.status);
+      }
+  
+      if (error.response && error.response.status === 401) {
+        console.log('[API] Token might be expired, attempting to refresh...');
+        try {
+          const newToken = await getAccessToken();
+          return sendTo24GolfApi(type, url, payload, apiData, newToken, processedBookings, paymentAmounts, paymentStatus);
+        } catch (tokenError) {
+          console.error(`[API Error] Failed to refresh token: ${tokenError.message}`);
+        }
       }
     }
-  }
-};
+  };
 
 // Helper function to calculate end time (1 hour after start time)
 const calculateEndTime = (startTime) => {
