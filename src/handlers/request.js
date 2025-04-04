@@ -93,19 +93,8 @@ const setupRequestHandler = (page, accessToken, maps) => {
       console.log(`[INFO] Booking_Create detected - URL: ${url}, Method: ${method}`);
       console.log(`[DEBUG] Booking_Create payload:`, JSON.stringify(payload, null, 2));
       
-      // 점주 웹사이트에서 예약 등록 처리 (리팩토링 과정에서 누락된 부분)
+      // 점주 웹사이트에서 예약 등록 처리
       if (payload.book_type === 'M' || !payload.book_id) {
-        // FIX: 결제 금액을 제대로 추출하도록 수정
-        // 먼저 payload에서 직접 amount 필드 확인
-        let amount = 0;
-        if (payload.amount && payload.amount !== 'undefined') {
-          amount = parseInt(payload.amount, 10) || 0;
-          console.log(`[INFO] Found amount ${amount} in booking payload`);
-        }
-        
-        // 결제 정보를 확인 (없으면 기본값 0 사용)
-        const finished = payload.finished === 'true' || false;
-        
         // 시간 형식 변환 (KST -> UTC)
         const startDate = convertKSTtoUTC(payload.start_datetime);
         const endDate = convertKSTtoUTC(payload.end_datetime);
@@ -115,57 +104,82 @@ const setupRequestHandler = (page, accessToken, maps) => {
         // 모의 bookId 생성 (실제 bookId는 응답에서 받음)
         const tempBookId = `TEMP_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
         
-        // 직접 API 호출 (점주 예약)
-        try {
-          let currentToken = accessToken;
-          if (!currentToken) {
-            currentToken = await getAccessToken();
+        // 결제 정보를 확인하기 위해 book_idx가 필요합니다
+        // 그러나 예약 생성 시에는 book_idx가 아직 없으므로 한번 지연 시킵니다
+
+        // 예약 정보를 저장
+        const bookingInfo = {
+          tempBookId,
+          url,
+          payload,
+          startDate,
+          endDate,
+          timestamp: Date.now()
+        };
+        
+        // requestMap에 예약 정보 저장
+        requestMap.set(`bookingCreate_${tempBookId}`, bookingInfo);
+        
+        console.log(`[INFO] Delaying booking creation for tempBookId: ${tempBookId} to gather payment information`);
+        
+        // 예약 정보를 API로 전송하기 전 결제 정보 대기
+        setTimeout(async () => {
+          try {
+            let currentToken = accessToken;
+            if (!currentToken) {
+              currentToken = await getAccessToken();
+            }
+            
+            // 최신 결제 정보 확인
+            // 이 시점에 이미 결제 정보가 수집되었을 수 있음
+            const latestPaymentInfo = findLatestPaymentInfo(requestMap);
+            let amount = 0;
+            let finished = false;
+            
+            if (latestPaymentInfo) {
+              amount = latestPaymentInfo.amount || 0;
+              finished = latestPaymentInfo.finished || false;
+              console.log(`[INFO] Found payment information for new booking: amount=${amount}, finished=${finished}`);
+            }
+            
+            // 예약 데이터 준비
+            const apiData = {
+              externalId: tempBookId,
+              name: payload.name || 'Manager Booking',
+              phone: payload.phone || '010-0000-0000',
+              partySize: parseInt(payload.person || 1, 10),
+              startDate: startDate,
+              endDate: endDate,
+              roomId: payload.room_id?.toString() || 'unknown',
+              hole: payload.hole || '18',
+              paymented: finished,
+              paymentAmount: amount,
+              crawlingSite: 'KimCaddie',
+              immediate: false
+            };
+            
+            console.log(`[INFO] Processing Manager Booking_Create with complete information: ${JSON.stringify(apiData, null, 2)}`);
+            
+            // 실제 API 호출
+            await sendTo24GolfApi(
+              'Booking_Create',
+              url,
+              payload,
+              apiData,
+              currentToken,
+              processedBookings,
+              paymentAmounts,
+              paymentStatus
+            );
+            
+            console.log(`[INFO] Sent Manager Booking_Create to 24Golf API with amount: ${amount}`);
+            
+            // 요청 맵에서 제거
+            requestMap.delete(`bookingCreate_${tempBookId}`);
+          } catch (error) {
+            console.error(`[ERROR] Failed to process Manager Booking_Create: ${error.message}`);
           }
-          
-          // 예약 데이터 준비
-          const apiData = {
-            externalId: tempBookId, // 임시 ID (응답에서 실제 ID로 대체됨)
-            name: payload.name || 'Manager Booking',
-            phone: payload.phone || '010-0000-0000',
-            partySize: parseInt(payload.person || 1, 10),
-            startDate: startDate,
-            endDate: endDate,
-            roomId: payload.room_id?.toString() || 'unknown',
-            hole: payload.hole || '18',
-            paymented: finished,
-            paymentAmount: amount,
-            crawlingSite: 'KimCaddie',
-            immediate: false
-          };
-          
-          console.log(`[INFO] Processing Manager Booking_Create: ${JSON.stringify(apiData, null, 2)}`);
-          
-          // tempBookId를 키로 사용해 requestMap에 저장
-          requestMap.set(tempBookId, { 
-            url, 
-            method, 
-            payload, 
-            type: 'Manager_Booking_Create',
-            apiData,
-            timestamp: Date.now()
-          });
-          
-          // 실제 API 호출
-          await sendTo24GolfApi(
-            'Booking_Create',
-            url,
-            payload,
-            apiData,
-            currentToken,
-            processedBookings,
-            paymentAmounts,
-            paymentStatus
-          );
-          
-          console.log(`[INFO] Sent Manager Booking_Create to 24Golf API`);
-        } catch (error) {
-          console.error(`[ERROR] Failed to process Manager Booking_Create: ${error.message}`);
-        }
+        }, 2000); // 2초 대기 - 결제 정보가 들어오기를 기다림
       }
       
       // 결제 정보 추출 시도
@@ -270,52 +284,6 @@ const setupRequestHandler = (page, accessToken, maps) => {
             paymentStatus.set(bookId, finished);
             
             console.log(`[INFO] Stored and updated payment for book_id ${bookId}: amount=${amount}, finished=${finished}`);
-            
-            // 중요: 예약 생성 후 결제 정보가 업데이트된 경우 즉시 API 호출
-            if (amount > 0) {
-              // 최근 30초 이내에 생성된 예약인지 확인
-              const pendingBooking = bookingDataMap.get(bookId);
-              const isRecentBooking = pendingBooking && 
-                                    (pendingBooking.type === 'Booking_Create' || pendingBooking.type === 'Booking_Create_Pending') && 
-                                    (Date.now() - pendingBooking.timestamp < 30000);
-                                    
-              if (isRecentBooking) {
-                console.log(`[INFO] Recent booking detected with new payment info - will update payment info for book_id: ${bookId}`);
-                
-                try {
-                  // 토큰 확인
-                  let currentToken = accessToken;
-                  if (!currentToken) {
-                    currentToken = await getAccessToken();
-                  }
-                  
-                  // 결제 정보 업데이트 API 호출 준비
-                  const updatePayload = {
-                    externalId: bookId,
-                    paymentAmount: amount,
-                    paymented: finished
-                  };
-                  
-                  // 즉시 업데이트 수행
-                  setTimeout(async () => {
-                    await sendTo24GolfApi(
-                      'Booking_Update',
-                      `payment_update_${bookId}`,
-                      { externalId: bookId },
-                      updatePayload,
-                      currentToken,
-                      null,
-                      paymentAmounts,
-                      paymentStatus
-                    );
-                    
-                    console.log(`[INFO] Successfully sent payment update for recent booking: ${bookId}`);
-                  }, 3000); // 3초 후에 실행 (예약 생성 API가 먼저 처리되도록)
-                } catch (error) {
-                  console.error(`[ERROR] Failed to send immediate payment update: ${error.message}`);
-                }
-              }
-            }
           } else {
             console.log(`[WARN] No matching book_id found for revenue ID ${revenueId}, storing temporary data`);
             // book_idx와 revenue ID 매핑 저장
@@ -328,6 +296,9 @@ const setupRequestHandler = (page, accessToken, maps) => {
                 processed: false,
                 timestamp: Date.now()
               });
+              
+              // 중요: 새로 추가 - 현재 보류 중인 예약 생성이 있는지 확인
+              updatePendingBookingWithPayment(requestMap, bookIdx, amount, finished);
             }
           }
         }
@@ -372,6 +343,35 @@ const setupRequestHandler = (page, accessToken, maps) => {
   page.once('close', () => {
     clearInterval(cleanupInterval);
   });
+};
+
+// 최신 결제 정보 찾기
+const findLatestPaymentInfo = (requestMap) => {
+  let latestPaymentInfo = null;
+  let latestTimestamp = 0;
+  
+  for (const [key, data] of requestMap.entries()) {
+    if ((key.startsWith('revenueUpdate_') || key.startsWith('paymentUpdate_')) && 
+        data.amount && data.timestamp > latestTimestamp) {
+      latestPaymentInfo = data;
+      latestTimestamp = data.timestamp;
+    }
+  }
+  
+  return latestPaymentInfo;
+};
+
+// 보류 중인 예약에 결제 정보 업데이트
+const updatePendingBookingWithPayment = (requestMap, bookIdx, amount, finished) => {
+  for (const [key, data] of requestMap.entries()) {
+    if (key.startsWith('bookingCreate_') && data.tempBookId) {
+      console.log(`[INFO] Found pending booking creation, adding payment info: amount=${amount}, finished=${finished}`);
+      data.paymentAmount = amount;
+      data.paymentFinished = finished;
+      data.paymentTimestamp = Date.now();
+      requestMap.set(key, data);
+    }
+  }
 };
 
 const extractRevenueId = (url) => {
