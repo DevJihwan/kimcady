@@ -77,17 +77,27 @@ const setupResponseHandler = (page, accessToken, maps) => {
               const roomId = room || bookingInfo.room || 'unknown';
               const amount = parseInt(bookingInfo.amount || 0, 10);
               const hole = bookingInfo.hole || '9';
-              
+
               console.log(`[DEBUG] Extracted booking data - name: ${name}, startDate: ${startDate}, roomId: ${roomId}`);
+
               
               // 결제 완료 여부 (항상 false로 설정)
-              const finished = false;
-              
-              // 맵에 저장
-              if (amount > 0) {
-                paymentAmounts.set(bookId, amount);
-              }
-              paymentStatus.set(bookId, finished);
+                const finished = false;
+
+                // 맵에 금액 저장 (초기값으로만 설정하고, 아래에서 맵의 최신 금액을 우선 사용)
+                if (initialAmount > 0 && !paymentAmounts.has(bookId)) {
+                paymentAmounts.set(bookId, initialAmount);
+                console.log(`[DEBUG] Setting initial payment amount for book_id ${bookId}: ${initialAmount}`);
+                }
+                paymentStatus.set(bookId, finished);
+
+                // 최신 예약 데이터에서 결제 금액 확인 (추가된 부분)
+                await checkLatestBookingData(bookId, maps);
+
+                // 최종 결제 금액 가져오기 (맵에서 최신 값 사용) (추가된 부분)
+                const finalAmount = paymentAmounts.get(bookId) || initialAmount;
+                console.log(`[INFO] Using final payment amount for book_id ${bookId}: ${finalAmount} (initial amount was: ${initialAmount})`);
+
               
               // 예약 데이터 준비 - 직접 변수 값 지정하여 명확하게 처리
               const apiData = {
@@ -368,6 +378,44 @@ const processCustomerBookings = (customerId, bookingData, accessToken, maps, pro
     console.error(`[ERROR] Failed to process customer bookings: ${e.message}`);
   }
 };
+
+
+// 캐시된 예약 데이터에서 특정 예약의 최신 결제 정보를 확인하는 함수
+const checkLatestBookingData = async (bookId, maps) => {
+    const { paymentAmounts, paymentStatus } = maps;
+    
+    try {
+      // 캐시된 예약 데이터가 있으면 사용
+      if (bookingDataCache.data && bookingDataCache.data.results && Array.isArray(bookingDataCache.data.results)) {
+        // 해당 bookId의 예약 찾기
+        const booking = bookingDataCache.data.results.find(item => item.book_id === bookId);
+        
+        if (booking) {
+          // 최신 결제 정보 추출
+          const revenueDetail = booking.revenue_detail || {};
+          const latestAmount = parseInt(revenueDetail.amount || booking.amount || 0, 10);
+          const latestFinished = revenueDetail.finished === true || revenueDetail.finished === 'true';
+          
+          console.log(`[INFO] Found latest booking data for book_id ${bookId} in cache: amount=${latestAmount}, finished=${latestFinished}`);
+          
+          // 금액이 유효하면 맵에 업데이트
+          if (latestAmount > 0) {
+            paymentAmounts.set(bookId, latestAmount);
+            console.log(`[INFO] Updated payment amount for book_id ${bookId} from cached data: ${latestAmount}`);
+          }
+          
+          paymentStatus.set(bookId, latestFinished);
+          return true;
+        }
+      }
+      
+      console.log(`[DEBUG] No latest booking data found in cache for book_id ${bookId}`);
+      return false;
+    } catch (e) {
+      console.error(`[ERROR] Failed to check latest booking data for book_id ${bookId}: ${e.message}`);
+      return false;
+    }
+  };
 
 // 고객 정보 응답 처리 (앱 예약 감지용)
 const handleCustomerResponse = async (response, customerUpdates) => {
