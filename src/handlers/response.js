@@ -85,9 +85,9 @@ const setupResponseHandler = (page, accessToken, maps) => {
                 const finished = false;
 
                 // 맵에 금액 저장 (초기값으로만 설정하고, 아래에서 맵의 최신 금액을 우선 사용)
-                if (initialAmount > 0 && !paymentAmounts.has(bookId)) {
-                paymentAmounts.set(bookId, initialAmount);
-                console.log(`[DEBUG] Setting initial payment amount for book_id ${bookId}: ${initialAmount}`);
+                if (amount > 0 && !paymentAmounts.has(bookId)) {
+                paymentAmounts.set(bookId, amount);
+                console.log(`[DEBUG] Setting initial payment amount for book_id ${bookId}: ${amount}`);
                 }
                 paymentStatus.set(bookId, finished);
 
@@ -95,8 +95,8 @@ const setupResponseHandler = (page, accessToken, maps) => {
                 await checkLatestBookingData(bookId, maps);
 
                 // 최종 결제 금액 가져오기 (맵에서 최신 값 사용) (추가된 부분)
-                const finalAmount = paymentAmounts.get(bookId) || initialAmount;
-                console.log(`[INFO] Using final payment amount for book_id ${bookId}: ${finalAmount} (initial amount was: ${initialAmount})`);
+                const finalAmount = paymentAmounts.get(bookId) || amount;
+                console.log(`[INFO] Using final payment amount for book_id ${bookId}: ${finalAmount} (initial amount was: ${amount})`);
 
               
               // 예약 데이터 준비 - 직접 변수 값 지정하여 명확하게 처리
