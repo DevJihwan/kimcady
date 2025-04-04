@@ -10,7 +10,7 @@ const setupRequestHandler = (page, accessToken, maps) => {
     const postData = request.postData();
     const headers = request.headers();
 
-    console.log(`[DEBUG] Request captured - URL: ${url}, Method: ${method}`);
+    //console.log(`[DEBUG] Request captured - URL: ${url}, Method: ${method}`);
 
     if (!url.startsWith('https://api.kimcaddie.com/api/')) return;
 

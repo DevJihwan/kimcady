@@ -31,7 +31,7 @@ const setupResponseHandler = (page, accessToken, maps) => {
     const request = response.request();
     const method = request.method();
 
-    console.log(`[DEBUG] Response captured - URL: ${url}, Status: ${status}, Method: ${method}`);
+    //console.log(`[DEBUG] Response captured - URL: ${url}, Status: ${status}, Method: ${method}`);
 
     // Skip non-successful responses and non-API calls
     if (!url.includes('api.kimcaddie.com/api/') || status >= 400) {
