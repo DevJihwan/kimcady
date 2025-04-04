@@ -1,5 +1,6 @@
 const { parseMultipartFormData } = require('../utils/parser');
 const { sendTo24GolfApi, getAccessToken, convertKSTtoUTC } = require('../utils/api');
+const { pendingCreateBookingIds } = require('./response-helpers');
 
 // 점주 예약 생성 및 결제 정보 처리를 위한 맵
 const pendingBookingMap = new Map();
@@ -137,6 +138,12 @@ const setupRequestHandler = (page, accessToken, maps) => {
       payload.externalId = bookingId;
       console.log(`[DEBUG] Booking change detected - URL: ${url}, BookingId: ${bookingId}, Payload:`, JSON.stringify(payload, null, 2));
 
+      // 생성 중인 예약인지 확인
+      if (pendingCreateBookingIds.has(bookingId)) {
+        console.log(`[INFO] Skipping update for booking ${bookingId} as it's being created`);
+        return;
+      }
+
       // Check if it's a cancellation
       if (payload.state && payload.state === 'canceled') {
         console.log(`[INFO] Booking_Cancel detected for book_id: ${bookingId}`);
@@ -266,6 +273,9 @@ const setupRequestHandler = (page, accessToken, maps) => {
             return;
           }
           
+          // 생성 진행 중인 예약으로 표시
+          pendingCreateBookingIds.add(bookId);
+          
           // 1. 먼저 book_idx가 있다면 해당하는 결제 정보 찾기
           let amount = 0;
           let finished = false;
@@ -280,6 +290,10 @@ const setupRequestHandler = (page, accessToken, maps) => {
               finished = paymentInfo.finished || false;
               foundPaymentInfo = true;
               console.log(`[INFO] Found payment info via paymentUpdate for book_idx ${bookIdx}: amount=${amount}, finished=${finished}`);
+              
+              // 결제 정보 저장
+              paymentAmounts.set(bookId, amount);
+              paymentStatus.set(bookId, finished);
             }
           }
           
@@ -292,6 +306,10 @@ const setupRequestHandler = (page, accessToken, maps) => {
                 finished = value.finished || false;
                 foundPaymentInfo = true;
                 console.log(`[INFO] Found payment info via revenueUpdate for book_idx ${bookIdx}: amount=${amount}, finished=${finished}`);
+                
+                // 결제 정보 저장
+                paymentAmounts.set(bookId, amount);
+                paymentStatus.set(bookId, finished);
                 break;
               }
             }
@@ -314,12 +332,6 @@ const setupRequestHandler = (page, accessToken, maps) => {
                 let currentToken = accessToken;
                 if (!currentToken) {
                   currentToken = await getAccessToken();
-                }
-                
-                // 3. 결제 정보가 아직 없다면, GET /owner/booking/ 호출 전 5초 대기
-                if (!foundPaymentInfo) {
-                  console.log(`[INFO] No payment info found yet, waiting for GET /owner/booking/ to fetch more data...`);
-                  await new Promise(resolve => setTimeout(resolve, 1000)); // 1초 대기
                 }
                 
                 // API 데이터 준비
@@ -355,12 +367,22 @@ const setupRequestHandler = (page, accessToken, maps) => {
                 console.log(`[INFO] Successfully sent booking with real book_id: ${bookId}, amount: ${amount}`);
                 
                 // 처리 완료 표시
-                processedApiCallMap.set(bookId, true);
+                processedApiCallMap.set(bookId, {
+                  timestamp: Date.now(),
+                  processed: true
+                });
+                
+                // 5초 후에 생성 진행 중 목록에서 제거
+                setTimeout(() => {
+                  pendingCreateBookingIds.delete(bookId);
+                  console.log(`[INFO] Removed ${bookId} from pending creation list`);
+                }, 5000);
                 
                 // 처리 완료 후 제거
                 pendingBookingMap.delete(latestKey);
               } catch (error) {
                 console.error(`[ERROR] Failed to process booking with real book_id: ${error.message}`);
+                pendingCreateBookingIds.delete(bookId); // 에러 발생 시 즉시 제거
               }
             }
           }
