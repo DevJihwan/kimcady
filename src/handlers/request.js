@@ -95,9 +95,16 @@ const setupRequestHandler = (page, accessToken, maps) => {
       
       // 점주 웹사이트에서 예약 등록 처리 (리팩토링 과정에서 누락된 부분)
       if (payload.book_type === 'M' || !payload.book_id) {
-        // 결제 금액은 아직 없을 수 있음 (예약 생성 후 결제 등록)
-        const amount = parseInt(payload.amount, 10) || 0;
-        const finished = false;
+        // FIX: 결제 금액을 제대로 추출하도록 수정
+        // 먼저 payload에서 직접 amount 필드 확인
+        let amount = 0;
+        if (payload.amount && payload.amount !== 'undefined') {
+          amount = parseInt(payload.amount, 10) || 0;
+          console.log(`[INFO] Found amount ${amount} in booking payload`);
+        }
+        
+        // 결제 정보를 확인 (없으면 기본값 0 사용)
+        const finished = payload.finished === 'true' || false;
         
         // 시간 형식 변환 (KST -> UTC)
         const startDate = convertKSTtoUTC(payload.start_datetime);
