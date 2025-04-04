@@ -1,16 +1,17 @@
 // responseHandler.js
 const { sendTo24GolfApi, getAccessToken } = require('../utils/api');
-const BookingService = require('./services/bookingService');
-const CustomerService = require('./services/customerService');
-const RevenueService = require('./services/revenueService');
+const BookingService = require('../services/bookingService');
+const CustomerService = require('../services/customerService');
+const RevenueService = require('../services/revenueService');
 const { parseMultipartFormData } = require('../utils/parser');
 
+// 전역 상태 관리
 let processedCustomerRequests = new Set();
 let bookingDataCache = { timestamp: 0, data: null };
 
 const setupResponseHandler = (page, accessToken, maps) => {
   const bookingService = new BookingService(maps, accessToken, bookingDataCache);
-  const customerService = new CustomerService(maps, accessToken, processedCustomerRequests);
+  const customerService = new CustomerService(maps, accessToken, processedCustomerRequests, bookingDataCache);
   const revenueService = new RevenueService(maps, accessToken);
 
   page.on('response', async (response) => {
@@ -28,7 +29,7 @@ const setupResponseHandler = (page, accessToken, maps) => {
         '/api/owner/customer/': () => 
           method === 'GET' && customerService.handleCustomerResponse(response),
         '/owner/booking/': () => 
-          method === 'GET' && bookingService.handleBookingList(response),
+          method === 'GET' && bookingService.handleBookingList(response, customerService),
         '/owner/revenue/': () => {
           if (method === 'PATCH') return revenueService.handleRevenueUpdate(response, request);
           if (method === 'POST') return revenueService.handleRevenueCreation(response, request);
@@ -43,6 +44,7 @@ const setupResponseHandler = (page, accessToken, maps) => {
 
     } catch (error) {
       console.error(`[ERROR] Error handling response for ${url}: ${error.message}`);
+      console.error(`[ERROR] Stack trace:`, error.stack);
     }
   });
 };
