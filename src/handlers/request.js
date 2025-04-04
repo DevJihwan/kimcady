@@ -140,7 +140,17 @@ const setupRequestHandler = (page, accessToken, maps) => {
           
           console.log(`[INFO] Processing Manager Booking_Create: ${JSON.stringify(apiData, null, 2)}`);
           
-          // 실제 API 호출 - 이 부분이 누락되었던 것!
+          // tempBookId를 키로 사용해 requestMap에 저장
+          requestMap.set(tempBookId, { 
+            url, 
+            method, 
+            payload, 
+            type: 'Manager_Booking_Create',
+            apiData,
+            timestamp: Date.now()
+          });
+          
+          // 실제 API 호출
           await sendTo24GolfApi(
             'Booking_Create',
             url,
@@ -153,17 +163,6 @@ const setupRequestHandler = (page, accessToken, maps) => {
           );
           
           console.log(`[INFO] Sent Manager Booking_Create to 24Golf API`);
-          
-          // tempBookId를 키로 사용해 requestMap에 저장
-          requestMap.set(tempBookId, { 
-            url, 
-            method, 
-            payload, 
-            type: 'Manager_Booking_Create',
-            apiData
-          });
-          
-          // 응답 처리는 response 핸들러에서 실행됨
         } catch (error) {
           console.error(`[ERROR] Failed to process Manager Booking_Create: ${error.message}`);
         }
@@ -271,15 +270,62 @@ const setupRequestHandler = (page, accessToken, maps) => {
             paymentStatus.set(bookId, finished);
             
             console.log(`[INFO] Stored and updated payment for book_id ${bookId}: amount=${amount}, finished=${finished}`);
+            
+            // 중요: 예약 생성 후 결제 정보가 업데이트된 경우 즉시 API 호출
+            if (amount > 0) {
+              // 최근 30초 이내에 생성된 예약인지 확인
+              const pendingBooking = bookingDataMap.get(bookId);
+              const isRecentBooking = pendingBooking && 
+                                    (pendingBooking.type === 'Booking_Create' || pendingBooking.type === 'Booking_Create_Pending') && 
+                                    (Date.now() - pendingBooking.timestamp < 30000);
+                                    
+              if (isRecentBooking) {
+                console.log(`[INFO] Recent booking detected with new payment info - will update payment info for book_id: ${bookId}`);
+                
+                try {
+                  // 토큰 확인
+                  let currentToken = accessToken;
+                  if (!currentToken) {
+                    currentToken = await getAccessToken();
+                  }
+                  
+                  // 결제 정보 업데이트 API 호출 준비
+                  const updatePayload = {
+                    externalId: bookId,
+                    paymentAmount: amount,
+                    paymented: finished
+                  };
+                  
+                  // 즉시 업데이트 수행
+                  setTimeout(async () => {
+                    await sendTo24GolfApi(
+                      'Booking_Update',
+                      `payment_update_${bookId}`,
+                      { externalId: bookId },
+                      updatePayload,
+                      currentToken,
+                      null,
+                      paymentAmounts,
+                      paymentStatus
+                    );
+                    
+                    console.log(`[INFO] Successfully sent payment update for recent booking: ${bookId}`);
+                  }, 3000); // 3초 후에 실행 (예약 생성 API가 먼저 처리되도록)
+                } catch (error) {
+                  console.error(`[ERROR] Failed to send immediate payment update: ${error.message}`);
+                }
+              }
+            }
           } else {
             console.log(`[WARN] No matching book_id found for revenue ID ${revenueId}, storing temporary data`);
             // book_idx와 revenue ID 매핑 저장
             if (bookIdx) {
-              requestMap.set(`revenueUpdate_${revenueId}`, {
+              requestMap.set(`paymentUpdate_${bookIdx}`, {
                 revenueId,
                 bookIdx,
                 amount,
                 finished,
+                processed: false,
                 timestamp: Date.now()
               });
             }
@@ -303,6 +349,23 @@ const setupRequestHandler = (page, accessToken, maps) => {
   // 정리 인터벌 추가
   const cleanupInterval = setInterval(() => {
     // 필요에 따라 주기적인 정리 작업 추가 가능
+    // 오래된 requestMap 항목 제거
+    const now = Date.now();
+    const keysToDelete = [];
+    
+    for (const [key, data] of requestMap.entries()) {
+      if (data.timestamp && (now - data.timestamp > 3600000)) { // 1시간 이상 지난 항목
+        keysToDelete.push(key);
+      }
+    }
+    
+    for (const key of keysToDelete) {
+      requestMap.delete(key);
+    }
+    
+    if (keysToDelete.length > 0) {
+      console.log(`[INFO] Cleaned up ${keysToDelete.length} old entries from requestMap`);
+    }
   }, 60 * 60 * 1000); // 1시간마다
   
   // 페이지 종료 시 정리
